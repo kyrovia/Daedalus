@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<robot name="daedalus_two_link">
+  <link name="base"/>
+
+  <link name="link1">
+    <inertial>
+      <origin xyz="0.5 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.01" ixy="0" ixz="0"
+               iyy="0.10" iyz="0" izz="0.10"/>
+    </inertial>
+  </link>
+
+  <joint name="joint1" type="revolute">
+    <parent link="base"/>
+    <child link="link1"/>
+    <origin xyz="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-3.14" upper="3.14" effort="50" velocity="4"/>
+  </joint>
+
+  <link name="link2">
+    <inertial>
+      <origin xyz="0.4 0 0"/>
+      <mass value="0.8"/>
+      <inertia ixx="0.008" ixy="0" ixz="0"
+               iyy="0.06" iyz="0" izz="0.06"/>
+    </inertial>
+  </link>
+
+  <joint name="joint2" type="revolute">
+    <parent link="link1"/>
+    <child link="link2"/>
+    <origin xyz="1 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.5" upper="2.5" effort="25" velocity="5"/>
+  </joint>
+</robot>
