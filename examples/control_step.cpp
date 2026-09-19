@@ -2,7 +2,7 @@
 #include <iostream>
 #include <memory>
 
-#include "daedalus/control/control_pipeline.hpp"
+#include "daedalus/control/daedalus_loop.hpp"
 
 int main(int argc, char** argv) {
   if (argc != 2) {
@@ -28,7 +28,7 @@ int main(int argc, char** argv) {
         daedalus::JointVector::Constant(n, 80.0),
         daedalus::JointVector::Constant(n, 12.0)};
 
-    daedalus::ControlPipeline pipeline(
+    daedalus::DaedalusLoop loop(
         model, limits, ctc, impedance,
         daedalus::ControllerMode::kGravityCompensation,
         daedalus::JointVector::Zero(n));
@@ -39,7 +39,7 @@ int main(int argc, char** argv) {
         daedalus::JointVector::Zero(n)};
 
     std::cout << "safe torque: "
-              << pipeline.compute(state, reference, 0.001).transpose() << '\n';
+              << loop.compute(state, reference, 0.001).transpose() << '\n';
   } catch (const std::exception& error) {
     std::cerr << "control step failed: " << error.what() << '\n';
     return 1;

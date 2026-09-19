@@ -1,11 +1,11 @@
-#include "daedalus/control/control_pipeline.hpp"
+#include "daedalus/control/daedalus_loop.hpp"
 
 #include <stdexcept>
 #include <utility>
 
 namespace daedalus {
 
-ControlPipeline::ControlPipeline(
+DaedalusLoop::DaedalusLoop(
     std::shared_ptr<const PinocchioModel> model, const SafetyLimits& limits,
     ComputedTorqueConfig computed_torque_config,
     JointImpedanceConfig impedance_config, const ControllerMode initial_mode,
@@ -27,7 +27,7 @@ ControlPipeline::ControlPipeline(
   torque_filter_.reset(initial_tau);
 }
 
-JointVector ControlPipeline::compute(
+JointVector DaedalusLoop::compute(
     const JointState& state, const JointReference& reference,
     const double dt) {
   reference_limiter_.validateState(state);
@@ -50,17 +50,17 @@ JointVector ControlPipeline::compute(
   return torque_filter_.filter(raw_tau, dt);
 }
 
-void ControlPipeline::setMode(
+void DaedalusLoop::setMode(
     const ControllerMode mode, const JointVector& current_commanded_tau) {
   torque_filter_.reset(current_commanded_tau);
   mode_ = mode;
 }
 
-ControllerMode ControlPipeline::mode() const noexcept {
+ControllerMode DaedalusLoop::mode() const noexcept {
   return mode_;
 }
 
-const JointVector& ControlPipeline::previousTorque() const noexcept {
+const JointVector& DaedalusLoop::previousTorque() const noexcept {
   return torque_filter_.previousTorque();
 }
 

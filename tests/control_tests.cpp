@@ -6,7 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "daedalus/control/computed_torque_controller.hpp"
-#include "daedalus/control/control_pipeline.hpp"
+#include "daedalus/control/daedalus_loop.hpp"
 #include "daedalus/control/gravity_compensator.hpp"
 #include "daedalus/control/joint_impedance_controller.hpp"
 #include "daedalus/safety/reference_limiter.hpp"
@@ -123,10 +123,10 @@ TEST_CASE("Invalid dimensions and nonfinite values are rejected") {
   REQUIRE_THROWS_AS(model->gravity(invalid), std::invalid_argument);
 }
 
-TEST_CASE("Pipeline mode switching preserves torque continuity") {
+TEST_CASE("DaedalusLoop mode switching preserves torque continuity") {
   const auto model = makeModel();
   auto limits = makeLimits(100.0, 10.0);
-  daedalus::ControlPipeline pipeline(
+  daedalus::DaedalusLoop loop(
       model, limits,
       {JointVector::Constant(2, 100.0), JointVector::Constant(2, 20.0)},
       {JointVector::Constant(2, 80.0), JointVector::Constant(2, 12.0)},
@@ -135,13 +135,13 @@ TEST_CASE("Pipeline mode switching preserves torque continuity") {
 
   const JointState state = zeroState();
   JointReference reference = zeroReference();
-  const JointVector before = pipeline.compute(state, reference, 0.1);
-  pipeline.setMode(
+  const JointVector before = loop.compute(state, reference, 0.1);
+  loop.setMode(
       daedalus::ControllerMode::kComputedTorque, before);
   reference.q = JointVector::Ones(2);
-  const JointVector after = pipeline.compute(state, reference, 0.001);
+  const JointVector after = loop.compute(state, reference, 0.001);
 
   REQUIRE(((after - before).array().abs() <= 0.0100000001).all());
-  REQUIRE(pipeline.mode() ==
+  REQUIRE(loop.mode() ==
           daedalus::ControllerMode::kComputedTorque);
 }

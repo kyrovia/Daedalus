@@ -16,14 +16,14 @@ enum class ControllerMode {
   kJointImpedance,
 };
 
-class ControlPipeline final {
+class DaedalusLoop final {
  public:
-  ControlPipeline(std::shared_ptr<const PinocchioModel> model,
-                  const SafetyLimits& limits,
-                  ComputedTorqueConfig computed_torque_config,
-                  JointImpedanceConfig impedance_config,
-                  ControllerMode initial_mode,
-                  const JointVector& initial_tau);
+  DaedalusLoop(std::shared_ptr<const PinocchioModel> model,
+               const SafetyLimits& limits,
+               ComputedTorqueConfig computed_torque_config,
+               JointImpedanceConfig impedance_config,
+               ControllerMode initial_mode,
+               const JointVector& initial_tau);
 
   [[nodiscard]] JointVector compute(
       const JointState& state, const JointReference& reference, double dt);
