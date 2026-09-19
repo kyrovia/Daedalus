@@ -8,21 +8,11 @@
 #include <pinocchio/multibody/model.hpp>
 #include <pinocchio/parsers/urdf.hpp>
 
+#include "daedalus/common/vector_require.hpp"
+
 namespace daedalus {
-namespace {
 
-void requireVector(const JointVector& value, const int expected,
-                   const char* name) {
-  if (value.size() != expected) {
-    throw std::invalid_argument(std::string(name) + " has incorrect size");
-  }
-  if (!value.allFinite()) {
-    throw std::invalid_argument(std::string(name) + " contains NaN or Inf");
-  }
-}
-
-}  // namespace
-
+//Impl接入model data joint_names 方便统一调用
 struct PinocchioModel::Impl {
   pinocchio::Model model;
   mutable pinocchio::Data data;
@@ -41,6 +31,7 @@ struct PinocchioModel::Impl {
   }
 };
 
+//解析urdf，创建impl智能指针
 PinocchioModel::PinocchioModel(const std::string& urdf_path) {
   if (urdf_path.empty()) {
     throw std::invalid_argument("URDF path must not be empty");
@@ -78,17 +69,19 @@ JointVector PinocchioModel::effortLimits() const {
   return impl_->model.effortLimit;
 }
 
+//重力补偿
 JointVector PinocchioModel::gravity(const JointVector& q) const {
-  requireVector(q, nq(), "q");
+  requireSizeAndFinite(q, nq(), "q");
   return pinocchio::computeGeneralizedGravity(impl_->model, impl_->data, q);
 }
 
+//完整逆动力学rnea
 JointVector PinocchioModel::inverseDynamics(
     const JointVector& q, const JointVector& dq,
     const JointVector& ddq) const {
-  requireVector(q, nq(), "q");
-  requireVector(dq, nv(), "dq");
-  requireVector(ddq, nv(), "ddq");
+  requireSizeAndFinite(q, nq(), "q");
+  requireSizeAndFinite(dq, nv(), "dq");
+  requireSizeAndFinite(ddq, nv(), "ddq");
   return pinocchio::rnea(impl_->model, impl_->data, q, dq, ddq);
 }
 

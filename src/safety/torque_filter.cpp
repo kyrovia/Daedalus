@@ -2,23 +2,11 @@
 
 #include <cmath>
 #include <stdexcept>
-#include <string>
 #include <utility>
 
+#include "daedalus/common/vector_require.hpp"
+
 namespace daedalus {
-namespace {
-
-void requireTorqueVector(const JointVector& value, const Eigen::Index size,
-                         const char* name) {
-  if (value.size() != size) {
-    throw std::invalid_argument(std::string(name) + " has incorrect size");
-  }
-  if (!value.allFinite()) {
-    throw std::invalid_argument(std::string(name) + " contains NaN or Inf");
-  }
-}
-
-}  // namespace
 
 TorqueFilter::TorqueFilter(JointVector tau_max, JointVector tau_rate_max)
     : tau_max_(std::move(tau_max)),
@@ -26,15 +14,12 @@ TorqueFilter::TorqueFilter(JointVector tau_max, JointVector tau_rate_max)
   if (tau_max_.size() == 0 || tau_rate_max_.size() != tau_max_.size()) {
     throw std::invalid_argument("torque limits have incompatible sizes");
   }
-  if (!tau_max_.allFinite() || !tau_rate_max_.allFinite() ||
-      (tau_max_.array() <= 0.0).any() ||
-      (tau_rate_max_.array() <= 0.0).any()) {
-    throw std::invalid_argument("torque limits must be finite and positive");
-  }
+  requirePositive(tau_max_, tau_max_.size(), "tau_max");
+  requirePositive(tau_rate_max_, tau_max_.size(), "tau_rate_max");
 }
 
 void TorqueFilter::reset(const JointVector& initial_tau) {
-  requireTorqueVector(initial_tau, tau_max_.size(), "initial_tau");
+  requireSizeAndFinite(initial_tau, tau_max_.size(), "initial_tau");
   if ((initial_tau.array().abs() > tau_max_.array()).any()) {
     throw std::out_of_range("initial torque exceeds absolute limits");
   }
@@ -46,7 +31,7 @@ JointVector TorqueFilter::filter(const JointVector& raw_tau, const double dt) {
   if (!initialized_) {
     throw std::logic_error("torque filter must be reset before use");
   }
-  requireTorqueVector(raw_tau, tau_max_.size(), "raw_tau");
+  requireSizeAndFinite(raw_tau, tau_max_.size(), "raw_tau");
   if (!std::isfinite(dt) || dt <= 0.0) {
     throw std::invalid_argument("dt must be finite and positive");
   }

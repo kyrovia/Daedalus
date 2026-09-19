@@ -1,32 +1,11 @@
 #include "daedalus/safety/reference_limiter.hpp"
 
 #include <stdexcept>
-#include <string>
 #include <utility>
 
+#include "daedalus/common/vector_require.hpp"
+
 namespace daedalus {
-namespace {
-
-///个数和有限性检查
-void requireSizeAndFinite(const JointVector& value, const Eigen::Index size,
-                          const char* name) {
-  if (value.size() != size) {
-    throw std::invalid_argument(std::string(name) + " has incorrect size");
-  }
-  if (!value.allFinite()) {
-    throw std::invalid_argument(std::string(name) + " contains NaN or Inf");
-  }
-}
-///正数检查
-void requirePositive(const JointVector& value, const Eigen::Index size,
-                     const char* name) {
-  requireSizeAndFinite(value, size, name);
-  if ((value.array() <= 0.0).any()) {
-    throw std::invalid_argument(std::string(name) + " must be positive");
-  }
-}
-
-}  // namespace
 
 ReferenceLimiter::ReferenceLimiter(SafetyLimits limits)
     : limits_(std::move(limits)) {
