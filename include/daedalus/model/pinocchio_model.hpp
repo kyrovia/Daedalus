@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "daedalus/types/cartesian_types.hpp"
 #include "daedalus/types/joint_types.hpp"
 
 namespace daedalus {
@@ -21,12 +22,18 @@ class PinocchioModel final {
   [[nodiscard]] int nq() const noexcept;
   [[nodiscard]] int nv() const noexcept;
   [[nodiscard]] const std::vector<std::string>& jointNames() const noexcept;
+  [[nodiscard]] std::vector<std::string> bodyFrameNames() const;
+  [[nodiscard]] bool hasFrame(const std::string& frame_name) const;
   [[nodiscard]] JointVector effortLimits() const;
 
   [[nodiscard]] JointVector gravity(const JointVector& q) const;
   [[nodiscard]] JointVector inverseDynamics(
       const JointVector& q, const JointVector& dq,
       const JointVector& ddq) const;
+  [[nodiscard]] CartesianPose framePose(
+      const JointVector& q, const std::string& frame_name) const;
+  [[nodiscard]] Eigen::MatrixXd frameJacobian(
+      const JointVector& q, const std::string& frame_name) const;
 
  private:
   struct Impl;

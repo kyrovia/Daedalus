@@ -8,12 +8,14 @@ namespace daedalus {
 DaedalusLoop::DaedalusLoop(
     std::shared_ptr<const PinocchioModel> model, const SafetyLimits& limits,
     ComputedTorqueConfig computed_torque_config,
-    JointImpedanceConfig impedance_config, const ControllerMode initial_mode,
-    const JointVector& initial_tau)
+    JointImpedanceConfig impedance_config,
+    CartesianImpedanceConfig cartesian_config,
+    const ControllerMode initial_mode, const JointVector& initial_tau)
     : model_(std::move(model)),
       gravity_(model_),
       computed_torque_(model_, std::move(computed_torque_config)),
       impedance_(model_, std::move(impedance_config)),
+      cartesian_impedance_(model_, std::move(cartesian_config)),
       reference_limiter_(limits),
       torque_filter_(limits.tau_max, limits.tau_rate_max),
       mode_(initial_mode) {
@@ -44,10 +46,26 @@ JointVector DaedalusLoop::compute(
     case ControllerMode::kJointImpedance:
       raw_tau = impedance_.compute(state, safe_reference);
       break;
+    ///模式已经是笛卡尔，防止还在喂关节参考
+    case ControllerMode::kCartesianImpedance:
+      throw std::logic_error(
+          "cartesian impedance requires CartesianReference");
     default:
       throw std::logic_error("unknown controller mode");
   }
   return torque_filter_.filter(raw_tau, dt);
+}
+
+JointVector DaedalusLoop::compute(const JointState& state,
+                                  const CartesianReference& reference,
+                                  const double dt) {
+  if (mode_ != ControllerMode::kCartesianImpedance) {
+    throw std::logic_error(
+        "cartesian compute requires ControllerMode::kCartesianImpedance");
+  }
+  reference_limiter_.validateState(state);
+  return torque_filter_.filter(
+      cartesian_impedance_.compute(state, reference), dt);
 }
 
 void DaedalusLoop::setMode(

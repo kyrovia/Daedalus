@@ -1,8 +1,12 @@
 #include "daedalus/model/pinocchio_model.hpp"
 
 #include <stdexcept>
+#include <string>
 #include <utility>
 
+#include <pinocchio/algorithm/frames.hpp>
+#include <pinocchio/algorithm/jacobian.hpp>
+#include <pinocchio/algorithm/kinematics.hpp>
 #include <pinocchio/algorithm/rnea.hpp>
 #include <pinocchio/multibody/data.hpp>
 #include <pinocchio/multibody/model.hpp>
@@ -65,6 +69,21 @@ const std::vector<std::string>& PinocchioModel::jointNames() const noexcept {
   return impl_->joint_names;
 }
 
+std::vector<std::string> PinocchioModel::bodyFrameNames() const {
+  std::vector<std::string> names;
+  names.reserve(impl_->model.nframes);
+  for (const auto& frame : impl_->model.frames) {
+    if (frame.type == pinocchio::BODY) {
+      names.push_back(frame.name);
+    }
+  }
+  return names;
+}
+
+bool PinocchioModel::hasFrame(const std::string& frame_name) const {
+  return impl_->model.existFrame(frame_name);
+}
+
 JointVector PinocchioModel::effortLimits() const {
   return impl_->model.effortLimit;
 }
@@ -83,6 +102,41 @@ JointVector PinocchioModel::inverseDynamics(
   requireSizeAndFinite(dq, nv(), "dq");
   requireSizeAndFinite(ddq, nv(), "ddq");
   return pinocchio::rnea(impl_->model, impl_->data, q, dq, ddq);
+}
+
+namespace {
+
+pinocchio::FrameIndex requireFrameId(const pinocchio::Model& model,
+                                     const std::string& frame_name) {
+  if (!model.existFrame(frame_name)) {
+    throw std::invalid_argument("unknown frame '" + frame_name + "'");
+  }
+  return model.getFrameId(frame_name);
+}
+
+}  // namespace
+
+///计算frame的位姿
+CartesianPose PinocchioModel::framePose(
+    const JointVector& q, const std::string& frame_name) const {
+  requireSizeAndFinite(q, nq(), "q");
+  const pinocchio::FrameIndex frame_id =
+      requireFrameId(impl_->model, frame_name);
+  pinocchio::forwardKinematics(impl_->model, impl_->data, q);
+  pinocchio::updateFramePlacements(impl_->model, impl_->data);
+  const pinocchio::SE3& placement = impl_->data.oMf[frame_id];
+  return {placement.translation(), Eigen::Quaterniond(placement.rotation())};
+}
+///LOCAL_WORLD_ALIGNED 原点在末端，坐标系在world，速度符合真实末端速度，且可以用world去表示task
+Eigen::MatrixXd PinocchioModel::frameJacobian(
+    const JointVector& q, const std::string& frame_name) const {
+  requireSizeAndFinite(q, nq(), "q");
+  const pinocchio::FrameIndex frame_id =
+      requireFrameId(impl_->model, frame_name);
+  Eigen::MatrixXd jacobian(6, nv());
+  pinocchio::computeFrameJacobian(impl_->model, impl_->data, q, frame_id,
+                                  pinocchio::LOCAL_WORLD_ALIGNED, jacobian);
+  return jacobian;
 }
 
 }  // namespace daedalus

@@ -1,6 +1,7 @@
 #include <exception>
 #include <iostream>
 #include <memory>
+#include <stdexcept>
 
 #include "daedalus/control/daedalus_loop.hpp"
 
@@ -27,9 +28,17 @@ int main(int argc, char** argv) {
     daedalus::JointImpedanceConfig impedance{
         daedalus::JointVector::Constant(n, 80.0),
         daedalus::JointVector::Constant(n, 12.0)};
+    daedalus::CartesianImpedanceConfig cartesian;
+    cartesian.stiffness.resize(6);
+    cartesian.stiffness << 200.0, 200.0, 200.0, 20.0, 20.0, 20.0;
+    const auto body_frames = model->bodyFrameNames();
+    if (body_frames.empty()) {
+      throw std::runtime_error("URDF has no body frames");
+    }
+    cartesian.end_effector_frame = body_frames.back();
 
     daedalus::DaedalusLoop loop(
-        model, limits, ctc, impedance,
+        model, limits, ctc, impedance, cartesian,
         daedalus::ControllerMode::kGravityCompensation,
         daedalus::JointVector::Zero(n));
     const daedalus::JointState state{

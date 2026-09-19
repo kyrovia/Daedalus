@@ -23,6 +23,7 @@ add_library(daedalus_control
   src/control/gravity_compensator.cpp
   src/control/computed_torque_controller.cpp
   src/control/joint_impedance_controller.cpp
+  src/control/cartesian_impedance_controller.cpp
   src/control/daedalus_loop.cpp
 )
 add_library(daedalus::control ALIAS daedalus_control)
