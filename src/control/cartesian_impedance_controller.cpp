@@ -1,6 +1,5 @@
 #include "daedalus/control/cartesian_impedance_controller.hpp"
 
-#include <cmath>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -35,25 +34,6 @@ Eigen::Vector3d orientationError(const Eigen::Quaterniond& desired,
   return error_angle_axis.axis() * error_angle_axis.angle();
 }
 
-void requireFiniteScalar(const double value, const char* name) {
-  if (!std::isfinite(value) || value < 0.0) {
-    throw std::invalid_argument(std::string(name) +
-                                " must be finite and nonnegative");
-  }
-}
-
-void requireFinitePose(const CartesianPose& pose) {
-  if (!pose.position.allFinite()) {
-    throw std::invalid_argument("position contains NaN or Inf");
-  }
-  if (!pose.orientation.coeffs().allFinite()) {
-    throw std::invalid_argument("orientation contains NaN or Inf");
-  }
-  if (pose.orientation.norm() < 1e-12) {
-    throw std::invalid_argument("orientation must be a non-zero quaternion");
-  }
-}
-
 }  // namespace
 
 CartesianImpedanceController::CartesianImpedanceController(
@@ -68,8 +48,8 @@ CartesianImpedanceController::CartesianImpedanceController(
   } else {
     requireNonnegative(config_.damping, 6, "damping");
   }
-  requireFiniteScalar(config_.nullspace_stiffness, "nullspace_stiffness");
-  requireFiniteScalar(config_.nullspace_damping, "nullspace_damping");
+  requireNonnegative(config_.nullspace_stiffness, "nullspace_stiffness");
+  requireNonnegative(config_.nullspace_damping, "nullspace_damping");
   if (config_.end_effector_frame.empty()) {
     throw std::invalid_argument("end_effector_frame must not be empty");
   }
@@ -84,9 +64,7 @@ JointVector CartesianImpedanceController::compute(
   requireSizeAndFinite(state.q, model_->nq(), "q");
   requireSizeAndFinite(state.dq, model_->nv(), "dq");
   requireFinitePose(reference.pose);
-  if (!reference.wrench.allFinite()) {
-    throw std::invalid_argument("wrench contains NaN or Inf");
-  }
+  requireFinite(reference.wrench, "wrench");
 
   if (reference.q_nullspace.size() != 0) {
     requireSizeAndFinite(reference.q_nullspace, model_->nv(), "q_nullspace");

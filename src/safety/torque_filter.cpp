@@ -1,6 +1,5 @@
 #include "daedalus/safety/torque_filter.hpp"
 
-#include <cmath>
 #include <stdexcept>
 #include <utility>
 
@@ -32,9 +31,7 @@ JointVector TorqueFilter::filter(const JointVector& raw_tau, const double dt) {
     throw std::logic_error("torque filter must be reset before use");
   }
   requireSizeAndFinite(raw_tau, tau_max_.size(), "raw_tau");
-  if (!std::isfinite(dt) || dt <= 0.0) {
-    throw std::invalid_argument("dt must be finite and positive");
-  }
+  requirePositive(dt, "dt");
 
   const JointVector saturated =
       raw_tau.cwiseMax(-tau_max_).cwiseMin(tau_max_);
