@@ -1,0 +1,10 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Eigen3)
+if(@DAEDALUS_FIND_PINOCCHIO@)
+  find_dependency(pinocchio)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/daedalusTargets.cmake")
+check_required_components(daedalus)

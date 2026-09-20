@@ -1,32 +1,11 @@
 #include "daedalus/safety/reference_limiter.hpp"
 
 #include <stdexcept>
-#include <string>
 #include <utility>
 
+#include "daedalus/common/vector_require.hpp"
+
 namespace daedalus {
-namespace {
-
-///个数和有限性检查
-void requireSizeAndFinite(const JointVector& value, const Eigen::Index size,
-                          const char* name) {
-  if (value.size() != size) {
-    throw std::invalid_argument(std::string(name) + " has incorrect size");
-  }
-  if (!value.allFinite()) {
-    throw std::invalid_argument(std::string(name) + " contains NaN or Inf");
-  }
-}
-///正数检查
-void requirePositive(const JointVector& value, const Eigen::Index size,
-                     const char* name) {
-  requireSizeAndFinite(value, size, name);
-  if ((value.array() <= 0.0).any()) {
-    throw std::invalid_argument(std::string(name) + " must be positive");
-  }
-}
-
-}  // namespace
 
 ReferenceLimiter::ReferenceLimiter(SafetyLimits limits)
     : limits_(std::move(limits)) {
@@ -49,31 +28,64 @@ int ReferenceLimiter::dof() const noexcept {
   return static_cast<int>(limits_.q_lower.size());
 }
 
-void ReferenceLimiter::validateState(const JointState& state) const {
+ControlResult ReferenceLimiter::validateStateRealtime(
+    const JointState& state) const noexcept {
   const Eigen::Index n = limits_.q_lower.size();
-  requireSizeAndFinite(state.q, n, "state.q");
-  requireSizeAndFinite(state.dq, n, "state.dq");
-  if ((state.q.array() < limits_.q_lower.array()).any() ||
-      (state.q.array() > limits_.q_upper.array()).any()) {
-    throw std::out_of_range("measured joint position exceeds safety limits");
+  if (state.q.size() != n || state.dq.size() != n) {
+    return {ControlStatus::kInvalidDimension};
   }
-  if ((state.dq.array().abs() > limits_.dq_max.array()).any()) {
-    throw std::out_of_range("measured joint velocity exceeds safety limits");
+  if (!state.q.allFinite() || !state.dq.allFinite()) {
+    return {ControlStatus::kNonFiniteInput};
+  }
+  if ((state.q.array() < limits_.q_lower.array()).any() ||
+      (state.q.array() > limits_.q_upper.array()).any() ||
+      (state.dq.array().abs() > limits_.dq_max.array()).any()) {
+    return {ControlStatus::kStateLimitViolation};
+  }
+  return {};
+}
+
+ControlResult ReferenceLimiter::limitRealtime(
+    const JointReference& reference, JointReference& limited) const noexcept {
+  const Eigen::Index n = limits_.q_lower.size();
+  if (reference.q.size() != n || reference.dq.size() != n ||
+      reference.ddq.size() != n || limited.q.size() != n ||
+      limited.dq.size() != n || limited.ddq.size() != n) {
+    return {ControlStatus::kInvalidDimension};
+  }
+  if (!reference.q.allFinite() || !reference.dq.allFinite() ||
+      !reference.ddq.allFinite()) {
+    return {ControlStatus::kNonFiniteInput};
+  }
+  limited.q = reference.q.cwiseMax(limits_.q_lower).cwiseMin(limits_.q_upper);
+  limited.dq =
+      reference.dq.cwiseMax(-limits_.dq_max).cwiseMin(limits_.dq_max);
+  limited.ddq =
+      reference.ddq.cwiseMax(-limits_.ddq_max).cwiseMin(limits_.ddq_max);
+  return {};
+}
+
+void ReferenceLimiter::validateState(const JointState& state) const {
+  const ControlResult result = validateStateRealtime(state);
+  if (result.status == ControlStatus::kInvalidDimension ||
+      result.status == ControlStatus::kNonFiniteInput) {
+    throw std::invalid_argument(controlStatusMessage(result.status));
+  }
+  if (!result) {
+    throw std::out_of_range("measured joint position exceeds safety limits");
   }
 }
 
 JointReference ReferenceLimiter::limit(
     const JointReference& reference) const {
-  const Eigen::Index n = limits_.q_lower.size();
-  requireSizeAndFinite(reference.q, n, "reference.q");
-  requireSizeAndFinite(reference.dq, n, "reference.dq");
-  requireSizeAndFinite(reference.ddq, n, "reference.ddq");
-
-  JointReference result = reference;
-  result.q = result.q.cwiseMax(limits_.q_lower).cwiseMin(limits_.q_upper);
-  result.dq = result.dq.cwiseMax(-limits_.dq_max).cwiseMin(limits_.dq_max);
-  result.ddq =
-      result.ddq.cwiseMax(-limits_.ddq_max).cwiseMin(limits_.ddq_max);
+  JointReference result{
+      JointVector::Zero(limits_.q_lower.size()),
+      JointVector::Zero(limits_.q_lower.size()),
+      JointVector::Zero(limits_.q_lower.size())};
+  const ControlResult status = limitRealtime(reference, result);
+  if (!status) {
+    throw std::invalid_argument(controlStatusMessage(status.status));
+  }
   return result;
 }
 
