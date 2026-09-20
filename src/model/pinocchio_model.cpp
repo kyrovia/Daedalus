@@ -18,14 +18,12 @@
 
 namespace daedalus {
 
-//Impl接入model data joint_names 方便统一调用
 struct PinocchioModel::Impl {
   pinocchio::Model model;
-  mutable pinocchio::Data data;
   std::vector<std::string> joint_names;
 
   explicit Impl(pinocchio::Model loaded_model)
-      : model(std::move(loaded_model)), data(model) {
+      : model(std::move(loaded_model)) {
     joint_names.reserve(model.nv);
     const auto joint_count =
         static_cast<pinocchio::JointIndex>(model.njoints);
@@ -37,7 +35,22 @@ struct PinocchioModel::Impl {
   }
 };
 
-//解析urdf，创建impl智能指针
+struct PinocchioModel::Context::Impl {
+  const PinocchioModel::Impl* owner;
+  pinocchio::Data data;
+
+  explicit Impl(const PinocchioModel::Impl& model_impl)
+      : owner(&model_impl), data(model_impl.model) {}
+};
+
+PinocchioModel::Context::Context(std::unique_ptr<Context::Impl> impl)
+    : impl_(std::move(impl)) {}
+
+PinocchioModel::Context::~Context() = default;
+PinocchioModel::Context::Context(Context&&) noexcept = default;
+PinocchioModel::Context& PinocchioModel::Context::operator=(
+    Context&&) noexcept = default;
+
 PinocchioModel::PinocchioModel(const std::string& urdf_path) {
   if (urdf_path.empty()) {
     throw std::invalid_argument("URDF path must not be empty");
@@ -98,50 +111,30 @@ JointVector PinocchioModel::upperPositionLimits() const {
   return impl_->model.upperPositionLimit;
 }
 
-//重力补偿
-JointVector PinocchioModel::gravity(const JointVector& q) const {
-  requireSizeAndFinite(q, nq(), "q");
-  return pinocchio::computeGeneralizedGravity(impl_->model, impl_->data, q);
+PinocchioModel::Context PinocchioModel::createContext() const {
+  return Context(std::make_unique<Context::Impl>(*impl_));
 }
 
-JointVector PinocchioModel::coriolis(
-    const JointVector& q, const JointVector& dq) const {
-  requireSizeAndFinite(q, nq(), "q");
-  requireSizeAndFinite(dq, nv(), "dq");
-  pinocchio::computeAllTerms(impl_->model, impl_->data, q, dq);
-  return pinocchio::computeCoriolisMatrix(
-             impl_->model, impl_->data, q, dq) *
-         dq;
+ControlResult PinocchioModel::validateContextRealtime(
+    const Context& context) const noexcept {
+  if (!context.impl_ || context.impl_->owner != impl_.get()) {
+    return {ControlStatus::kModelError};
+  }
+  return {};
 }
 
-Eigen::MatrixXd PinocchioModel::inverseMassMatrix(
-    const JointVector& q) const {
-  requireSizeAndFinite(q, nq(), "q");
-  pinocchio::computeMinverse(impl_->model, impl_->data, q);
-  impl_->data.Minv.triangularView<Eigen::StrictlyLower>() =
-      impl_->data.Minv.transpose().triangularView<Eigen::StrictlyLower>();
-  return impl_->data.Minv;
-}
-
-//完整逆动力学rnea
-JointVector PinocchioModel::inverseDynamics(
-    const JointVector& q, const JointVector& dq,
-    const JointVector& ddq) const {
-  requireSizeAndFinite(q, nq(), "q");
-  requireSizeAndFinite(dq, nv(), "dq");
-  requireSizeAndFinite(ddq, nv(), "ddq");
-  return pinocchio::rnea(impl_->model, impl_->data, q, dq, ddq);
+void PinocchioModel::throwIfFailed(
+    const ControlResult result, const std::string& unknown_frame) {
+  if (result) {
+    return;
+  }
+  if (!unknown_frame.empty() && result.status == ControlStatus::kModelError) {
+    throw std::invalid_argument("unknown frame '" + unknown_frame + "'");
+  }
+  throw std::invalid_argument(controlStatusMessage(result.status));
 }
 
 namespace {
-
-pinocchio::FrameIndex requireFrameId(const pinocchio::Model& model,
-                                     const std::string& frame_name) {
-  if (!model.existFrame(frame_name)) {
-    throw std::invalid_argument("unknown frame '" + frame_name + "'");
-  }
-  return model.getFrameId(frame_name);
-}
 
 pinocchio::ReferenceFrame pinocchioReference(
     const JacobianReference reference) {
@@ -151,34 +144,251 @@ pinocchio::ReferenceFrame pinocchioReference(
     case JacobianReference::kLocalWorldAligned:
       return pinocchio::LOCAL_WORLD_ALIGNED;
   }
-  throw std::invalid_argument("unknown JacobianReference");
+  return pinocchio::LOCAL_WORLD_ALIGNED;
 }
 
 }  // namespace
 
-///计算frame的位姿
-CartesianPose PinocchioModel::framePose(
-    const JointVector& q, const std::string& frame_name) const {
-  requireSizeAndFinite(q, nq(), "q");
-  const pinocchio::FrameIndex frame_id =
-      requireFrameId(impl_->model, frame_name);
-  pinocchio::forwardKinematics(impl_->model, impl_->data, q);
-  pinocchio::updateFramePlacements(impl_->model, impl_->data);
-  const pinocchio::SE3& placement = impl_->data.oMf[frame_id];
-  return {placement.translation(), Eigen::Quaterniond(placement.rotation())};
+ControlResult PinocchioModel::gravityRealtime(
+    Context& context, const JointVector& q,
+    Eigen::Ref<JointVector> output) const noexcept {
+  ControlResult result = validateContextRealtime(context);
+  if (!result) {
+    return result;
+  }
+  result.status = validateSizeAndFinite(q, nq());
+  if (!result) {
+    return result;
+  }
+  result.status = validateMatrixShape(output.size(), 1, nv(), 1);
+  if (!result) {
+    return result;
+  }
+  auto& data = context.impl_->data;
+  pinocchio::computeGeneralizedGravity(impl_->model, data, q);
+  output = data.g;
+  return {output.allFinite() ? ControlStatus::kOk
+                             : ControlStatus::kNonFiniteOutput};
 }
 
-/// LOCAL_WORLD_ALIGNED：原点在末端、坐标轴对齐世界；LOCAL：原点与坐标轴都在末端。
+ControlResult PinocchioModel::coriolisRealtime(
+    Context& context, const JointVector& q, const JointVector& dq,
+    Eigen::Ref<JointVector> output) const noexcept {
+  ControlResult result = validateContextRealtime(context);
+  if (!result) {
+    return result;
+  }
+  result.status = validateSizeAndFinite(q, nq());
+  if (!result) {
+    return result;
+  }
+  result.status = validateSizeAndFinite(dq, nv());
+  if (!result) {
+    return result;
+  }
+  result.status = validateMatrixShape(output.size(), 1, nv(), 1);
+  if (!result) {
+    return result;
+  }
+  auto& data = context.impl_->data;
+  pinocchio::computeAllTerms(impl_->model, data, q, dq);
+  pinocchio::computeCoriolisMatrix(impl_->model, data, q, dq);
+  output.noalias() = data.C * dq;
+  return {output.allFinite() ? ControlStatus::kOk
+                             : ControlStatus::kNonFiniteOutput};
+}
+
+ControlResult PinocchioModel::inverseMassMatrixRealtime(
+    Context& context, const JointVector& q,
+    Eigen::Ref<Eigen::MatrixXd> output) const noexcept {
+  ControlResult result = validateContextRealtime(context);
+  if (!result) {
+    return result;
+  }
+  result.status = validateSizeAndFinite(q, nq());
+  if (!result) {
+    return result;
+  }
+  result.status = validateMatrixShape(output.rows(), output.cols(), nv(), nv());
+  if (!result) {
+    return result;
+  }
+  auto& data = context.impl_->data;
+  pinocchio::computeMinverse(impl_->model, data, q);
+  data.Minv.triangularView<Eigen::StrictlyLower>() =
+      data.Minv.transpose().triangularView<Eigen::StrictlyLower>();
+  output = data.Minv;
+  return {output.allFinite() ? ControlStatus::kOk
+                             : ControlStatus::kNonFiniteOutput};
+}
+
+ControlResult PinocchioModel::inverseDynamicsRealtime(
+    Context& context, const JointVector& q, const JointVector& dq,
+    const JointVector& ddq, Eigen::Ref<JointVector> output) const noexcept {
+  ControlResult result = validateContextRealtime(context);
+  if (!result) {
+    return result;
+  }
+  result.status = validateSizeAndFinite(q, nq());
+  if (!result) {
+    return result;
+  }
+  result.status = validateSizeAndFinite(dq, nv());
+  if (!result) {
+    return result;
+  }
+  result.status = validateSizeAndFinite(ddq, nv());
+  if (!result) {
+    return result;
+  }
+  result.status = validateMatrixShape(output.size(), 1, nv(), 1);
+  if (!result) {
+    return result;
+  }
+  auto& data = context.impl_->data;
+  pinocchio::rnea(impl_->model, data, q, dq, ddq);
+  output = data.tau;
+  return {output.allFinite() ? ControlStatus::kOk
+                             : ControlStatus::kNonFiniteOutput};
+}
+
+ControlResult PinocchioModel::framePoseRealtime(
+    Context& context, const JointVector& q, const std::string& frame_name,
+    CartesianPose& output) const noexcept {
+  ControlResult result = validateContextRealtime(context);
+  if (!result) {
+    return result;
+  }
+  result.status = validateSizeAndFinite(q, nq());
+  if (!result) {
+    return result;
+  }
+  if (!impl_->model.existFrame(frame_name)) {
+    return {ControlStatus::kModelError};
+  }
+  const pinocchio::FrameIndex frame_id = impl_->model.getFrameId(frame_name);
+  auto& data = context.impl_->data;
+  pinocchio::forwardKinematics(impl_->model, data, q);
+  pinocchio::updateFramePlacements(impl_->model, data);
+  const pinocchio::SE3& placement = data.oMf[frame_id];
+  output.position = placement.translation();
+  output.orientation = Eigen::Quaterniond(placement.rotation());
+  if (!output.position.allFinite() ||
+      !output.orientation.coeffs().allFinite()) {
+    return {ControlStatus::kNonFiniteOutput};
+  }
+  return {};
+}
+
+ControlResult PinocchioModel::frameJacobianRealtime(
+    Context& context, const JointVector& q, const std::string& frame_name,
+    const JacobianReference reference,
+    Eigen::Ref<Eigen::MatrixXd> output) const noexcept {
+  ControlResult result = validateContextRealtime(context);
+  if (!result) {
+    return result;
+  }
+  result.status = validateSizeAndFinite(q, nq());
+  if (!result) {
+    return result;
+  }
+  result.status = validateMatrixShape(output.rows(), output.cols(), 6, nv());
+  if (!result) {
+    return result;
+  }
+  if (!impl_->model.existFrame(frame_name)) {
+    return {ControlStatus::kModelError};
+  }
+  const pinocchio::FrameIndex frame_id = impl_->model.getFrameId(frame_name);
+  auto& data = context.impl_->data;
+  pinocchio::computeFrameJacobian(impl_->model, data, q, frame_id,
+                                  pinocchioReference(reference), output);
+  return {output.allFinite() ? ControlStatus::kOk
+                             : ControlStatus::kNonFiniteOutput};
+}
+
+JointVector PinocchioModel::gravity(Context& context,
+                                    const JointVector& q) const {
+  JointVector output(nv());
+  gravity(context, q, output);
+  return output;
+}
+
+void PinocchioModel::gravity(Context& context, const JointVector& q,
+                             Eigen::Ref<JointVector> output) const {
+  throwIfFailed(gravityRealtime(context, q, output));
+}
+
+JointVector PinocchioModel::coriolis(
+    Context& context, const JointVector& q, const JointVector& dq) const {
+  JointVector output(nv());
+  coriolis(context, q, dq, output);
+  return output;
+}
+
+void PinocchioModel::coriolis(
+    Context& context, const JointVector& q, const JointVector& dq,
+    Eigen::Ref<JointVector> output) const {
+  throwIfFailed(coriolisRealtime(context, q, dq, output));
+}
+
+Eigen::MatrixXd PinocchioModel::inverseMassMatrix(
+    Context& context, const JointVector& q) const {
+  Eigen::MatrixXd output(nv(), nv());
+  inverseMassMatrix(context, q, output);
+  return output;
+}
+
+void PinocchioModel::inverseMassMatrix(
+    Context& context, const JointVector& q,
+    Eigen::Ref<Eigen::MatrixXd> output) const {
+  throwIfFailed(inverseMassMatrixRealtime(context, q, output));
+}
+
+JointVector PinocchioModel::inverseDynamics(
+    Context& context, const JointVector& q, const JointVector& dq,
+    const JointVector& ddq) const {
+  JointVector output(nv());
+  inverseDynamics(context, q, dq, ddq, output);
+  return output;
+}
+
+void PinocchioModel::inverseDynamics(
+    Context& context, const JointVector& q, const JointVector& dq,
+    const JointVector& ddq, Eigen::Ref<JointVector> output) const {
+  throwIfFailed(inverseDynamicsRealtime(context, q, dq, ddq, output));
+}
+
+CartesianPose PinocchioModel::framePose(
+    Context& context, const JointVector& q,
+    const std::string& frame_name) const {
+  CartesianPose output;
+  framePose(context, q, frame_name, output);
+  return output;
+}
+
+void PinocchioModel::framePose(
+    Context& context, const JointVector& q, const std::string& frame_name,
+    CartesianPose& output) const {
+  throwIfFailed(framePoseRealtime(context, q, frame_name, output),
+                frame_name);
+}
+
 Eigen::MatrixXd PinocchioModel::frameJacobian(
-    const JointVector& q, const std::string& frame_name,
+    Context& context, const JointVector& q, const std::string& frame_name,
     const JacobianReference reference) const {
-  requireSizeAndFinite(q, nq(), "q");
-  const pinocchio::FrameIndex frame_id =
-      requireFrameId(impl_->model, frame_name);
   Eigen::MatrixXd jacobian(6, nv());
-  pinocchio::computeFrameJacobian(impl_->model, impl_->data, q, frame_id,
-                                  pinocchioReference(reference), jacobian);
+  frameJacobian(context, q, frame_name, reference, jacobian);
   return jacobian;
+}
+
+void PinocchioModel::frameJacobian(
+    Context& context, const JointVector& q, const std::string& frame_name,
+    const JacobianReference reference,
+    Eigen::Ref<Eigen::MatrixXd> output) const {
+  throwIfFailed(frameJacobianRealtime(context, q, frame_name, reference,
+                                      output),
+                frame_name);
 }
 
 }  // namespace daedalus

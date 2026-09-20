@@ -7,9 +7,12 @@
 #include <Eigen/Core>
 
 #include "daedalus/types/cartesian_types.hpp"
+#include "daedalus/types/control_status.hpp"
 
 namespace daedalus {
 
+// Construction-time checks. These throw and may allocate; do not call them
+// from a hard-realtime control cycle.
 inline void requireFinite(const double value, const char* name) {
   if (!std::isfinite(value)) {
     throw std::invalid_argument(std::string(name) + " contains NaN or Inf");
@@ -73,6 +76,30 @@ inline void requireFinitePose(const CartesianPose& pose) {
   if (pose.orientation.norm() < 1e-12) {
     throw std::invalid_argument("orientation must be a non-zero quaternion");
   }
+}
+
+// Realtime checks. These never throw and never allocate.
+template <typename Derived>
+[[nodiscard]] inline ControlStatus validateSizeAndFinite(
+    const Eigen::MatrixBase<Derived>& value,
+    const Eigen::Index size) noexcept {
+  if (value.size() != size) {
+    return ControlStatus::kInvalidDimension;
+  }
+  if (!value.allFinite()) {
+    return ControlStatus::kNonFiniteInput;
+  }
+  return ControlStatus::kOk;
+}
+
+[[nodiscard]] inline ControlStatus validateMatrixShape(
+    const Eigen::Index rows, const Eigen::Index cols,
+    const Eigen::Index expected_rows,
+    const Eigen::Index expected_cols) noexcept {
+  if (rows != expected_rows || cols != expected_cols) {
+    return ControlStatus::kInvalidDimension;
+  }
+  return ControlStatus::kOk;
 }
 
 }  // namespace daedalus

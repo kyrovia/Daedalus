@@ -1,5 +1,7 @@
 #include "daedalus/safety/torque_filter.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <utility>
 
@@ -18,30 +20,71 @@ TorqueFilter::TorqueFilter(JointVector tau_max, JointVector tau_rate_max)
 }
 
 void TorqueFilter::reset(const JointVector& initial_tau) {
-  requireSizeAndFinite(initial_tau, tau_max_.size(), "initial_tau");
-  if ((initial_tau.array().abs() > tau_max_.array()).any()) {
+  const ControlResult result = resetRealtime(initial_tau);
+  if (result.status == ControlStatus::kInvalidDimension ||
+      result.status == ControlStatus::kNonFiniteInput) {
+    throw std::invalid_argument(controlStatusMessage(result.status));
+  }
+  if (!result) {
     throw std::out_of_range("initial torque exceeds absolute limits");
+  }
+}
+
+ControlResult TorqueFilter::resetRealtime(
+    const JointVector& initial_tau) noexcept {
+  if (initial_tau.size() != tau_max_.size()) {
+    return {ControlStatus::kInvalidDimension};
+  }
+  if (!initial_tau.allFinite()) {
+    return {ControlStatus::kNonFiniteInput};
+  }
+  if ((initial_tau.array().abs() > tau_max_.array()).any()) {
+    return {ControlStatus::kStateLimitViolation};
   }
   previous_tau_ = initial_tau;
   initialized_ = true;
+  return {};
+}
+
+ControlResult TorqueFilter::filterRealtime(
+    const JointVector& raw_tau, const double dt,
+    JointVector& filtered) noexcept {
+  if (!initialized_) {
+    return {ControlStatus::kNotInitialized};
+  }
+  if (raw_tau.size() != tau_max_.size() ||
+      filtered.size() != tau_max_.size()) {
+    return {ControlStatus::kInvalidDimension};
+  }
+  if (!raw_tau.allFinite()) {
+    return {ControlStatus::kNonFiniteOutput};
+  }
+  if (!std::isfinite(dt) || dt <= 0.0) {
+    return {ControlStatus::kInvalidTimeStep};
+  }
+
+  for (Eigen::Index index = 0; index < raw_tau.size(); ++index) {
+    const double saturated =
+        std::clamp(raw_tau[index], -tau_max_[index], tau_max_[index]);
+    const double max_delta = tau_rate_max_[index] * dt;
+    previous_tau_[index] =
+        std::clamp(saturated, previous_tau_[index] - max_delta,
+                   previous_tau_[index] + max_delta);
+    filtered[index] = previous_tau_[index];
+  }
+  return {};
 }
 
 JointVector TorqueFilter::filter(const JointVector& raw_tau, const double dt) {
-  if (!initialized_) {
-    throw std::logic_error("torque filter must be reset before use");
+  JointVector result = JointVector::Zero(tau_max_.size());
+  const ControlResult status = filterRealtime(raw_tau, dt, result);
+  if (status.status == ControlStatus::kNotInitialized) {
+    throw std::logic_error(controlStatusMessage(status.status));
   }
-  requireSizeAndFinite(raw_tau, tau_max_.size(), "raw_tau");
-  requirePositive(dt, "dt");
-
-  const JointVector saturated =
-      raw_tau.cwiseMax(-tau_max_).cwiseMin(tau_max_);
-  const JointVector max_delta = tau_rate_max_ * dt;
-  previous_tau_ =
-      saturated.cwiseMax(previous_tau_ - max_delta)
-          .cwiseMin(previous_tau_ + max_delta)
-          .cwiseMax(-tau_max_)
-          .cwiseMin(tau_max_);
-  return previous_tau_;
+  if (!status) {
+    throw std::invalid_argument(controlStatusMessage(status.status));
+  }
+  return result;
 }
 
 const JointVector& TorqueFilter::previousTorque() const noexcept {

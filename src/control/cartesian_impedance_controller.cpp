@@ -5,28 +5,36 @@
 #include <utility>
 
 #include "daedalus/common/vector_require.hpp"
-#include "daedalus/control/control_math.hpp"
+#include "daedalus/control/control_validation.hpp"
 
 namespace daedalus {
 namespace {
 
-Eigen::Vector3d orientationError(const Eigen::Quaterniond& desired,
-                                 Eigen::Quaterniond current) {
+void orientationError(const Eigen::Quaterniond& desired,
+                      Eigen::Quaterniond current,
+                      Eigen::Ref<Eigen::Vector3d> error) {
   if (desired.coeffs().dot(current.coeffs()) < 0.0) {
     current.coeffs() = -current.coeffs();
   }
   const Eigen::AngleAxisd error_angle_axis(current * desired.inverse());
-  return error_angle_axis.axis() * error_angle_axis.angle();
+  error = error_angle_axis.axis() * error_angle_axis.angle();
 }
 
 }  // namespace
 
 CartesianImpedanceController::CartesianImpedanceController(
     std::shared_ptr<const PinocchioModel> model, CartesianImpedanceConfig config)
-    : model_(std::move(model)), config_(std::move(config)) {
-  if (!model_) {
-    throw std::invalid_argument("model must not be null");
-  }
+    : model_(std::move(model)),
+      context_(model_ ? model_->createContext()
+                      : throw std::invalid_argument("model must not be null")),
+      config_(std::move(config)),
+      jacobian_(6, model_->nv()),
+      jacobian_transpose_(model_->nv(), 6),
+      jacobian_pinv_(6, model_->nv()),
+      projector_(model_->nv(), model_->nv()),
+      secondary_(model_->nv()),
+      gravity_workspace_(model_->nv()),
+      pinv_workspace_(model_->nv(), 6) {
   requireNonnegative(config_.stiffness, 6, "stiffness");
   if (config_.damping.size() == 0) {
     config_.damping = 2.0 * config_.stiffness.array().sqrt();
@@ -44,48 +52,87 @@ CartesianImpedanceController::CartesianImpedanceController(
   }
 }
 
-JointVector CartesianImpedanceController::compute(
-    const JointState& state, const CartesianReference& reference) const {
-  requireSizeAndFinite(state.q, model_->nq(), "q");
-  requireSizeAndFinite(state.dq, model_->nv(), "dq");
-  requireFinitePose(reference.pose);
-  requireFinite(reference.wrench, "wrench");
-
-  if (reference.q_nullspace.size() != 0) {
-    requireSizeAndFinite(reference.q_nullspace, model_->nv(), "q_nullspace");
+ControlResult CartesianImpedanceController::compute(
+    const JointState& state, const CartesianReference& reference,
+    JointVector& output) const noexcept {
+  if (!model_) {
+    return {ControlStatus::kNotInitialized};
   }
+  if (output.size() != model_->nv()) {
+    return {ControlStatus::kInvalidDimension};
+  }
+  output.setZero();
+  ControlStatus status = validateJointState(state, model_->nq(), model_->nv());
+  if (status == ControlStatus::kOk) {
+    status = validateCartesianReference(reference, model_->nv());
+  }
+  if (status != ControlStatus::kOk) {
+    return {status};
+  }
+
+  ControlResult result = model_->framePoseRealtime(
+      context_, state.q, config_.end_effector_frame, pose_);
+  if (!result) {
+    return result;
+  }
+  result = model_->frameJacobianRealtime(
+      context_, state.q, config_.end_effector_frame,
+      JacobianReference::kLocalWorldAligned, jacobian_);
+  if (!result) {
+    return result;
+  }
+
+  error_.head<3>() = pose_.position - reference.pose.position;
+  orientationError(reference.pose.orientation.normalized(),
+                   pose_.orientation.normalized(), error_.tail<3>());
+
+  task_wrench_.noalias() = jacobian_ * state.dq;
+  for (Eigen::Index index = 0; index < 6; ++index) {
+    task_wrench_[index] =
+        -config_.stiffness[index] * error_[index] -
+        config_.damping[index] * task_wrench_[index] +
+        reference.wrench[index];
+  }
+  output.noalias() = jacobian_.transpose() * task_wrench_;
+
   const bool use_nullspace = reference.q_nullspace.size() != 0 &&
                              (config_.nullspace_stiffness > 0.0 ||
                               config_.nullspace_damping > 0.0);
-
-  const CartesianPose pose =
-      model_->framePose(state.q, config_.end_effector_frame);
-  const Eigen::MatrixXd jacobian =
-      model_->frameJacobian(state.q, config_.end_effector_frame);
-
-  CartesianVector error;
-  error.head<3>() = pose.position - reference.pose.position;
-  error.tail<3>() = orientationError(reference.pose.orientation.normalized(),
-                                     pose.orientation.normalized());
-
-  const CartesianVector task_wrench =
-      -config_.stiffness.cwiseProduct(error) -
-      config_.damping.cwiseProduct(jacobian * state.dq) + reference.wrench;
-  JointVector torque = jacobian.transpose() * task_wrench;
-
   if (use_nullspace) {
-    const int nv = model_->nv();
-    const Eigen::MatrixXd jacobian_transpose = jacobian.transpose();
-    const Eigen::MatrixXd nullspace_projector =
-        Eigen::MatrixXd::Identity(nv, nv) -
-        jacobian_transpose * dampedPseudoInverse(jacobian_transpose, 0.2);
-    torque += nullspace_projector *
-              (config_.nullspace_stiffness *
-                   (reference.q_nullspace - state.q) -
-               config_.nullspace_damping * state.dq);
+    jacobian_transpose_.noalias() = jacobian_.transpose();
+    result = dampedPseudoInverse(jacobian_transpose_, 0.2, jacobian_pinv_,
+                                 pinv_workspace_);
+    if (!result) {
+      output.setZero();
+      return result;
+    }
+    projector_.setIdentity();
+    projector_.noalias() -= jacobian_transpose_ * jacobian_pinv_;
+    for (Eigen::Index index = 0; index < secondary_.size(); ++index) {
+      secondary_[index] =
+          config_.nullspace_stiffness *
+              (reference.q_nullspace[index] - state.q[index]) -
+          config_.nullspace_damping * state.dq[index];
+    }
+    output.noalias() += projector_ * secondary_;
   }
 
-  torque += model_->gravity(state.q);
+  result = model_->gravityRealtime(context_, state.q, gravity_workspace_);
+  if (!result) {
+    output.setZero();
+    return result;
+  }
+  output += gravity_workspace_;
+  return {validateTorqueOutput(output, model_->nv())};
+}
+
+JointVector CartesianImpedanceController::compute(
+    const JointState& state, const CartesianReference& reference) const {
+  JointVector torque(model_->nv());
+  const ControlResult result = compute(state, reference, torque);
+  if (!result) {
+    throw std::runtime_error(controlStatusMessage(result.status));
+  }
   return torque;
 }
 
