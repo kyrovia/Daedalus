@@ -35,6 +35,15 @@ class DampedPseudoInverseWorkspace final {
 [[nodiscard]] Eigen::MatrixXd dampedPseudoInverse(
     const Eigen::MatrixXd& matrix, double regularization);
 
+void addJointLimitTorque(const JointVector& q, const JointVector& lower,
+                         const JointVector& upper, double safe_range,
+                         double max_torque,
+                         Eigen::Ref<JointVector> output) noexcept;
+
+void addFrictionTorque(const JointVector& dq, const JointVector& fp1,
+                       const JointVector& fp2, const JointVector& fp3,
+                       Eigen::Ref<JointVector> output) noexcept;
+
 [[nodiscard]] JointVector jointLimitTorque(const JointVector& q,
                                            const JointVector& lower,
                                            const JointVector& upper,

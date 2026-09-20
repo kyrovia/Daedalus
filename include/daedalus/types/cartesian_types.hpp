@@ -18,6 +18,8 @@ struct CartesianPose {
   Eigen::Quaterniond orientation = Eigen::Quaterniond::Identity();
 };
 
+// Impedance regulation setpoint: pose and optional nullspace posture.
+// There is no desired twist; damping acts on the measured task velocity.
 struct CartesianReference {
   CartesianPose pose;
   JointVector q_nullspace;

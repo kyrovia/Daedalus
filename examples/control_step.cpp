@@ -1,3 +1,4 @@
+#include <cmath>
 #include <iostream>
 #include <memory>
 
@@ -17,12 +18,18 @@ int main(int argc, char** argv) {
       model, {daedalus::JointVector::Constant(n, 80.0),
               daedalus::JointVector::Constant(n, 12.0)});
 
+  daedalus::JointVector tau_max = model->effortLimits();
+  for (int i = 0; i < n; ++i) {
+    if (!std::isfinite(tau_max[i]) || tau_max[i] <= 0.0) {
+      tau_max[i] = 10.0;
+    }
+  }
   const daedalus::SafetyLimits limits{
       model->lowerPositionLimits(),
       model->upperPositionLimits(),
       daedalus::JointVector::Constant(n, 2.0),
       daedalus::JointVector::Constant(n, 8.0),
-      model->effortLimits(),
+      tau_max,
       daedalus::JointVector::Constant(n, 50.0)};
   daedalus::ControlPipeline<daedalus::JointImpedanceController> pipeline(
       controller, limits);

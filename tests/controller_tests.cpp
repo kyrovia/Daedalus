@@ -1,3 +1,4 @@
+#include <cmath>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -63,6 +64,16 @@ TEST_CASE("Damped pseudo-inverse of identity is near identity") {
   REQUIRE((inverse - identity).norm() < 1e-8);
 }
 
+TEST_CASE("Joint-limit repulsion pushes away from the upper bound") {
+  const JointVector q = (JointVector(2) << 0.95, 0.0).finished();
+  const JointVector lower = JointVector::Constant(2, -1.0);
+  const JointVector upper = JointVector::Constant(2, 1.0);
+  const JointVector torque =
+      daedalus::jointLimitTorque(q, lower, upper, 0.2, 5.0);
+  REQUIRE(torque[0] < 0.0);
+  REQUIRE(std::abs(torque[1]) < 1e-12);
+}
+
 TEST_CASE("Friction feedforward is zero at rest") {
   const JointVector zeros = JointVector::Zero(2);
   const JointVector torque = daedalus::frictionTorque(
@@ -88,15 +99,51 @@ TEST_CASE("Cartesian impedance translation error maps through J transpose") {
   const JointState state = zeroState();
   daedalus::CartesianReference reference =
       poseReference(framePose(model, state.q, "link2"));
-  reference.pose.position.x() += 0.1;
+  reference.pose.position.z() += 0.1;
 
   const JointVector torque = computeTorque(controller, state, reference);
   daedalus::CartesianVector force = daedalus::CartesianVector::Zero();
-  force[0] = 200.0 * 0.1;
+  force[2] = 200.0 * 0.1;
   const JointVector expected =
       frameJacobian(model, state.q, "link2").transpose() * force +
       gravity(model, state.q);
   REQUIRE((torque - expected).norm() < 1e-10);
+}
+
+TEST_CASE("Cartesian impedance clips large task error") {
+  const auto model = makeModel();
+  daedalus::CartesianImpedanceConfig clipped = makeCartesianConfig();
+  clipped.limit_error = true;
+  daedalus::CartesianImpedanceConfig unclipped = makeCartesianConfig();
+  unclipped.limit_error = false;
+  daedalus::CartesianImpedanceController clipped_controller(model, clipped);
+  daedalus::CartesianImpedanceController unclipped_controller(model, unclipped);
+  const JointState state = zeroState();
+  daedalus::CartesianReference reference =
+      poseReference(framePose(model, state.q, "link2"));
+  reference.pose.position.z() += 0.5;
+
+  const JointVector clipped_torque =
+      computeTorque(clipped_controller, state, reference);
+  const JointVector unclipped_torque =
+      computeTorque(unclipped_controller, state, reference);
+  REQUIRE((clipped_torque - gravity(model, state.q)).norm() + 1e-9 <
+          (unclipped_torque - gravity(model, state.q)).norm());
+}
+
+TEST_CASE("Cartesian impedance orientation error produces task torque") {
+  const auto model = makeModel();
+  daedalus::CartesianImpedanceController controller(
+      model, makeCartesianConfig());
+  const JointState state = zeroState();
+  daedalus::CartesianReference reference =
+      poseReference(framePose(model, state.q, "link2"));
+  reference.pose.orientation =
+      Eigen::AngleAxisd(0.2, Eigen::Vector3d::UnitY()) *
+      reference.pose.orientation;
+
+  const JointVector torque = computeTorque(controller, state, reference);
+  REQUIRE((torque - gravity(model, state.q)).norm() > 1e-6);
 }
 
 TEST_CASE("Cartesian impedance rejects invalid configuration and input") {
@@ -259,6 +306,27 @@ TEST_CASE("Operational space optional friction and joint-limit terms apply") {
       poseReference(framePose(model, near_limit.q, "link2"));
   REQUIRE((computeTorque(limits, near_limit, limit_reference) -
            computeTorque(no_limits, near_limit, limit_reference))[0] < 0.0);
+}
+
+TEST_CASE("Operational space joint-limit override uses software limits") {
+  const auto model = makeModel();
+  auto urdf_config = makeOperationalSpaceConfig();
+  urdf_config.use_gravity = false;
+  urdf_config.use_coriolis = false;
+  urdf_config.use_joint_limit_repulsion = true;
+  auto software_config = urdf_config;
+  software_config.joint_limit_lower = JointVector::Constant(2, -1.0);
+  software_config.joint_limit_upper = JointVector::Constant(2, 1.0);
+  daedalus::OperationalSpaceController urdf_limits(model, urdf_config);
+  daedalus::OperationalSpaceController software_limits(model, software_config);
+  JointState near_software_limit = zeroState();
+  near_software_limit.q[0] = 0.9;
+  const auto reference =
+      poseReference(framePose(model, near_software_limit.q, "link2"));
+  REQUIRE(std::abs(computeTorque(urdf_limits, near_software_limit,
+                                 reference)[0]) < 1e-6);
+  REQUIRE(computeTorque(software_limits, near_software_limit, reference)[0] <
+          -1e-6);
 }
 
 TEST_CASE("Operational space realtime compute performs no Eigen allocation") {

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cmath>
+
 #include "daedalus/common/vector_require.hpp"
 #include "daedalus/types/cartesian_types.hpp"
 #include "daedalus/types/control_status.hpp"

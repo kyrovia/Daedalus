@@ -52,6 +52,7 @@ class OperationalSpaceController final {
   DampedPseudoInverseWorkspace jacobian_inverse_workspace_;
   Eigen::Vector3d desired_position_{Eigen::Vector3d::Zero()};
   Eigen::Quaterniond desired_orientation_{Eigen::Quaterniond::Identity()};
+  int end_effector_frame_id_{0};
   bool initialized_{false};
 };
 

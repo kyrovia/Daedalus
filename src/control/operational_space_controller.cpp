@@ -56,16 +56,30 @@ OperationalSpaceController::OperationalSpaceController(
     requireNonnegative(
         config_.nullspace_weights, model_->nv(), "nullspace_weights");
   }
-  if (config_.end_effector_frame.empty() ||
-      !model_->hasFrame(config_.end_effector_frame)) {
+  if (config_.end_effector_frame.empty()) {
     throw std::invalid_argument(
         "end_effector_frame must name an existing frame");
   }
+  end_effector_frame_id_ = model_->frameId(config_.end_effector_frame);
   requirePositive(config_.operational_space_regularization,
                   "operational_space_regularization");
   requirePositive(
       config_.nullspace_regularization, "nullspace_regularization");
   requirePositive(config_.error_clip, 6, "error_clip");
+  if (config_.joint_limit_lower.size() != 0) {
+    requireSizeAndFinite(config_.joint_limit_lower, model_->nv(),
+                         "joint_limit_lower");
+    lower_limits_ = config_.joint_limit_lower;
+  }
+  if (config_.joint_limit_upper.size() != 0) {
+    requireSizeAndFinite(config_.joint_limit_upper, model_->nv(),
+                         "joint_limit_upper");
+    upper_limits_ = config_.joint_limit_upper;
+  }
+  if ((lower_limits_.array() >= upper_limits_.array()).any()) {
+    throw std::invalid_argument(
+        "joint_limit_lower must be smaller than joint_limit_upper");
+  }
   requirePositive(
       config_.joint_limit_safe_range, "joint_limit_safe_range");
   requireNonnegative(
@@ -104,7 +118,7 @@ ControlResult OperationalSpaceController::compute(
   }
 
   ControlResult result = model_->framePoseRealtime(
-      context_, state.q, config_.end_effector_frame, pose_);
+      context_, state.q, end_effector_frame_id_, pose_);
   if (!result) {
     return result;
   }
@@ -142,7 +156,7 @@ ControlResult OperationalSpaceController::compute(
         pinocchio::log3(desired_rotation * current_rotation.transpose());
   }
   result = model_->frameJacobianRealtime(
-      context_, state.q, config_.end_effector_frame,
+      context_, state.q, end_effector_frame_id_,
       config_.jacobian_reference, jacobian_);
   if (!result) {
     output.setZero();
@@ -208,31 +222,13 @@ ControlResult OperationalSpaceController::compute(
   output += nullspace_torque_;
 
   if (config_.use_joint_limit_repulsion) {
-    for (Eigen::Index i = 0; i < output.size(); ++i) {
-      const double lower_ratio = std::clamp(
-          (config_.joint_limit_safe_range -
-           (state.q[i] - lower_limits_[i])) /
-              config_.joint_limit_safe_range,
-          0.0, 1.0);
-      const double upper_ratio = std::clamp(
-          (config_.joint_limit_safe_range -
-           (upper_limits_[i] - state.q[i])) /
-              config_.joint_limit_safe_range,
-          0.0, 1.0);
-      output[i] += config_.joint_limit_max_torque *
-                   (lower_ratio - upper_ratio);
-    }
+    addJointLimitTorque(state.q, lower_limits_, upper_limits_,
+                        config_.joint_limit_safe_range,
+                        config_.joint_limit_max_torque, output);
   }
   if (config_.use_friction) {
-    for (Eigen::Index i = 0; i < output.size(); ++i) {
-      output[i] +=
-          config_.friction_fp1[i] /
-              (1.0 + std::exp(-config_.friction_fp2[i] *
-                              (state.dq[i] + config_.friction_fp3[i]))) -
-          config_.friction_fp1[i] /
-              (1.0 + std::exp(-config_.friction_fp2[i] *
-                              config_.friction_fp3[i]));
-    }
+    addFrictionTorque(state.dq, config_.friction_fp1, config_.friction_fp2,
+                      config_.friction_fp3, output);
   }
   if (config_.use_coriolis) {
     result = model_->coriolisRealtime(

@@ -1,3 +1,4 @@
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <type_traits>
@@ -7,6 +8,7 @@
 #include "daedalus/control/cartesian_impedance_controller.hpp"
 #include "daedalus/control/control_pipeline.hpp"
 #include "daedalus/control/joint_impedance_controller.hpp"
+#include "daedalus/control/operational_space_controller.hpp"
 #include "daedalus/safety/reference_limiter.hpp"
 #include "daedalus/safety/torque_filter.hpp"
 #include "test_helpers.hpp"
@@ -18,6 +20,7 @@ using daedalus::test::framePose;
 using daedalus::test::makeCartesianConfig;
 using daedalus::test::makeLimits;
 using daedalus::test::makeModel;
+using daedalus::test::makeOperationalSpaceConfig;
 using daedalus::test::poseReference;
 using daedalus::test::zeroReference;
 using daedalus::test::zeroState;
@@ -245,6 +248,79 @@ TEST_CASE("Safe control pipeline step performs no Eigen allocation") {
       controller, makeLimits());
   const JointState state = zeroState();
   const JointReference reference = zeroReference();
+
+  REQUIRE(pipeline.step(state, reference, 0.001));
+  Eigen::internal::set_is_malloc_allowed(false);
+  const daedalus::ControlStepResult result =
+      pipeline.step(state, reference, 0.001);
+  Eigen::internal::set_is_malloc_allowed(true);
+
+  REQUIRE(result);
+  REQUIRE(result.command->torque().allFinite());
+}
+
+TEST_CASE("Control pipeline rejects a non-positive time step") {
+  RecordingJointController controller;
+  daedalus::ControlPipeline<RecordingJointController> pipeline(
+      controller, makeLimits());
+  const daedalus::ControlStepResult result =
+      pipeline.step(zeroState(), zeroReference(), 0.0);
+  REQUIRE(result.status == daedalus::ControlStatus::kInvalidTimeStep);
+  REQUIRE(result.command == nullptr);
+}
+
+TEST_CASE("Hold-last policy does not invent a command before the first success") {
+  RecordingJointController controller;
+  daedalus::ControlPipeline<RecordingJointController> pipeline(
+      controller, makeLimits(), daedalus::PipelineFailPolicy::kHoldLast);
+  JointState unsafe = zeroState();
+  unsafe.q[0] = 3.1;
+  const daedalus::ControlStepResult result =
+      pipeline.step(unsafe, zeroReference(), 0.001);
+  REQUIRE(result.status == daedalus::ControlStatus::kStateLimitViolation);
+  REQUIRE(result.command == nullptr);
+  REQUIRE(controller.calls == 0);
+}
+
+TEST_CASE("Control pipeline reset clears operational-space internal state") {
+  const auto model = makeModel();
+  auto config = makeOperationalSpaceConfig();
+  config.target_filter_alpha = 1.0;
+  config.use_gravity = false;
+  config.use_coriolis = false;
+  config.use_joint_limit_repulsion = false;
+  daedalus::OperationalSpaceController controller(model, config);
+  daedalus::ControlPipeline<daedalus::OperationalSpaceController> pipeline(
+      controller, makeLimits(100.0, 1.0e6));
+
+  const JointState rest = zeroState();
+  const auto rest_reference = poseReference(framePose(model, rest.q, "link2"));
+  REQUIRE(pipeline.step(rest, rest_reference, 0.001));
+
+  JointState moved = rest;
+  moved.q[0] = 0.4;
+  const daedalus::ControlStepResult before =
+      pipeline.step(moved, rest_reference, 0.001);
+  REQUIRE(before.ok());
+  const JointVector before_torque = before.command->torque();
+  REQUIRE(before_torque.norm() > 1e-6);
+
+  REQUIRE(pipeline.reset(JointVector::Zero(2)));
+  const daedalus::ControlStepResult after =
+      pipeline.step(moved, rest_reference, 0.001);
+  REQUIRE(after.ok());
+  REQUIRE(after.command->torque().norm() < before_torque.norm());
+}
+
+TEST_CASE("Cartesian pipeline step performs no Eigen allocation") {
+  const auto model = makeModel();
+  daedalus::CartesianImpedanceController controller(
+      model, makeCartesianConfig());
+  daedalus::ControlPipeline<daedalus::CartesianImpedanceController> pipeline(
+      controller, makeLimits());
+  const JointState state = zeroState();
+  auto reference = poseReference(framePose(model, state.q, "link2"));
+  reference.pose.position.x() += 0.02;
 
   REQUIRE(pipeline.step(state, reference, 0.001));
   Eigen::internal::set_is_malloc_allowed(false);

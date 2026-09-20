@@ -6,7 +6,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(DAEDALUS_BUILD_EXAMPLES "Build example executables" ON)
-option(DAEDALUS_ENABLE_ASAN "Enable UBSan (ASan is incompatible with prebuilt Pinocchio)" OFF)
+option(DAEDALUS_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
+option(DAEDALUS_ENABLE_ASAN "Deprecated alias for DAEDALUS_ENABLE_UBSAN" OFF)
 option(DAEDALUS_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
 
 set(DAEDALUS_DEPENDENCY_PREFIX "" CACHE PATH
@@ -17,12 +18,15 @@ elseif(DEFINED ENV{CONDA_PREFIX})
   list(PREPEND CMAKE_PREFIX_PATH "$ENV{CONDA_PREFIX}")
 endif()
 
-if(DAEDALUS_ENABLE_ASAN AND DAEDALUS_ENABLE_TSAN)
-  message(FATAL_ERROR "ASan and TSan cannot be enabled together")
-endif()
 if(DAEDALUS_ENABLE_ASAN)
-  # Full AddressSanitizer false-positives on Eigen aligned_free vs Pinocchio's
-  # realloc in prebuilt libpinocchio_parsers. UBSan still covers our code.
+  message(DEPRECATION
+    "DAEDALUS_ENABLE_ASAN enables UBSan only (ASan is incompatible with prebuilt Pinocchio). Use DAEDALUS_ENABLE_UBSAN.")
+  set(DAEDALUS_ENABLE_UBSAN ON)
+endif()
+if(DAEDALUS_ENABLE_UBSAN AND DAEDALUS_ENABLE_TSAN)
+  message(FATAL_ERROR "UBSan and TSan cannot be enabled together")
+endif()
+if(DAEDALUS_ENABLE_UBSAN)
   add_compile_options(-fsanitize=undefined -fno-omit-frame-pointer)
   add_link_options(-fsanitize=undefined)
 endif()
@@ -89,6 +93,11 @@ install(EXPORT daedalusTargets
   NAMESPACE daedalus::
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/daedalus
 )
+
+set(DAEDALUS_FIND_PINOCCHIO OFF)
+if(NOT BUILD_SHARED_LIBS)
+  set(DAEDALUS_FIND_PINOCCHIO ON)
+endif()
 
 configure_package_config_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/cmake/daedalusConfig.cmake.in"

@@ -44,6 +44,7 @@ class PinocchioModel final {
   [[nodiscard]] const std::vector<std::string>& jointNames() const noexcept;
   [[nodiscard]] std::vector<std::string> bodyFrameNames() const;
   [[nodiscard]] bool hasFrame(const std::string& frame_name) const;
+  [[nodiscard]] int frameId(const std::string& frame_name) const;
   [[nodiscard]] JointVector effortLimits() const;
   [[nodiscard]] JointVector lowerPositionLimits() const;
   [[nodiscard]] JointVector upperPositionLimits() const;
@@ -63,8 +64,15 @@ class PinocchioModel final {
       Context& context, const JointVector& q, const JointVector& dq,
       const JointVector& ddq, Eigen::Ref<JointVector> output) const noexcept;
   [[nodiscard]] ControlResult framePoseRealtime(
+      Context& context, const JointVector& q, int frame_id,
+      CartesianPose& output) const noexcept;
+  [[nodiscard]] ControlResult framePoseRealtime(
       Context& context, const JointVector& q, const std::string& frame_name,
       CartesianPose& output) const noexcept;
+  [[nodiscard]] ControlResult frameJacobianRealtime(
+      Context& context, const JointVector& q, int frame_id,
+      JacobianReference reference,
+      Eigen::Ref<Eigen::MatrixXd> output) const noexcept;
   [[nodiscard]] ControlResult frameJacobianRealtime(
       Context& context, const JointVector& q, const std::string& frame_name,
       JacobianReference reference,

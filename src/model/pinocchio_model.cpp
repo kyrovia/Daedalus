@@ -5,7 +5,6 @@
 #include <utility>
 
 #include <pinocchio/algorithm/aba.hpp>
-#include <pinocchio/algorithm/compute-all-terms.hpp>
 #include <pinocchio/algorithm/frames.hpp>
 #include <pinocchio/algorithm/jacobian.hpp>
 #include <pinocchio/algorithm/kinematics.hpp>
@@ -97,6 +96,13 @@ std::vector<std::string> PinocchioModel::bodyFrameNames() const {
 
 bool PinocchioModel::hasFrame(const std::string& frame_name) const {
   return impl_->model.existFrame(frame_name);
+}
+
+int PinocchioModel::frameId(const std::string& frame_name) const {
+  if (!impl_->model.existFrame(frame_name)) {
+    throw std::invalid_argument("unknown frame '" + frame_name + "'");
+  }
+  return static_cast<int>(impl_->model.getFrameId(frame_name));
 }
 
 JointVector PinocchioModel::effortLimits() const {
@@ -191,7 +197,6 @@ ControlResult PinocchioModel::coriolisRealtime(
     return result;
   }
   auto& data = context.impl_->data;
-  pinocchio::computeAllTerms(impl_->model, data, q, dq);
   pinocchio::computeCoriolisMatrix(impl_->model, data, q, dq);
   output.noalias() = data.C * dq;
   return {output.allFinite() ? ControlStatus::kOk
@@ -253,7 +258,7 @@ ControlResult PinocchioModel::inverseDynamicsRealtime(
 }
 
 ControlResult PinocchioModel::framePoseRealtime(
-    Context& context, const JointVector& q, const std::string& frame_name,
+    Context& context, const JointVector& q, const int frame_id,
     CartesianPose& output) const noexcept {
   ControlResult result = validateContextRealtime(context);
   if (!result) {
@@ -263,14 +268,15 @@ ControlResult PinocchioModel::framePoseRealtime(
   if (!result) {
     return result;
   }
-  if (!impl_->model.existFrame(frame_name)) {
+  if (frame_id < 0 ||
+      frame_id >= static_cast<int>(impl_->model.nframes)) {
     return {ControlStatus::kModelError};
   }
-  const pinocchio::FrameIndex frame_id = impl_->model.getFrameId(frame_name);
   auto& data = context.impl_->data;
   pinocchio::forwardKinematics(impl_->model, data, q);
   pinocchio::updateFramePlacements(impl_->model, data);
-  const pinocchio::SE3& placement = data.oMf[frame_id];
+  const pinocchio::SE3& placement =
+      data.oMf[static_cast<pinocchio::FrameIndex>(frame_id)];
   output.position = placement.translation();
   output.orientation = Eigen::Quaterniond(placement.rotation());
   if (!output.position.allFinite() ||
@@ -280,8 +286,19 @@ ControlResult PinocchioModel::framePoseRealtime(
   return {};
 }
 
-ControlResult PinocchioModel::frameJacobianRealtime(
+ControlResult PinocchioModel::framePoseRealtime(
     Context& context, const JointVector& q, const std::string& frame_name,
+    CartesianPose& output) const noexcept {
+  if (!impl_->model.existFrame(frame_name)) {
+    return {ControlStatus::kModelError};
+  }
+  return framePoseRealtime(
+      context, q, static_cast<int>(impl_->model.getFrameId(frame_name)),
+      output);
+}
+
+ControlResult PinocchioModel::frameJacobianRealtime(
+    Context& context, const JointVector& q, const int frame_id,
     const JacobianReference reference,
     Eigen::Ref<Eigen::MatrixXd> output) const noexcept {
   ControlResult result = validateContextRealtime(context);
@@ -296,15 +313,28 @@ ControlResult PinocchioModel::frameJacobianRealtime(
   if (!result) {
     return result;
   }
+  if (frame_id < 0 ||
+      frame_id >= static_cast<int>(impl_->model.nframes)) {
+    return {ControlStatus::kModelError};
+  }
+  auto& data = context.impl_->data;
+  pinocchio::computeFrameJacobian(
+      impl_->model, data, q, static_cast<pinocchio::FrameIndex>(frame_id),
+      pinocchioReference(reference), output);
+  return {output.allFinite() ? ControlStatus::kOk
+                             : ControlStatus::kNonFiniteOutput};
+}
+
+ControlResult PinocchioModel::frameJacobianRealtime(
+    Context& context, const JointVector& q, const std::string& frame_name,
+    const JacobianReference reference,
+    Eigen::Ref<Eigen::MatrixXd> output) const noexcept {
   if (!impl_->model.existFrame(frame_name)) {
     return {ControlStatus::kModelError};
   }
-  const pinocchio::FrameIndex frame_id = impl_->model.getFrameId(frame_name);
-  auto& data = context.impl_->data;
-  pinocchio::computeFrameJacobian(impl_->model, data, q, frame_id,
-                                  pinocchioReference(reference), output);
-  return {output.allFinite() ? ControlStatus::kOk
-                             : ControlStatus::kNonFiniteOutput};
+  return frameJacobianRealtime(
+      context, q, static_cast<int>(impl_->model.getFrameId(frame_name)),
+      reference, output);
 }
 
 JointVector PinocchioModel::gravity(Context& context,

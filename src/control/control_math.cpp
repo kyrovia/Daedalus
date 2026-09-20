@@ -62,27 +62,53 @@ Eigen::MatrixXd dampedPseudoInverse(const Eigen::MatrixXd& matrix,
   return output;
 }
 
+void addJointLimitTorque(const JointVector& q, const JointVector& lower,
+                         const JointVector& upper, const double safe_range,
+                         const double max_torque,
+                         Eigen::Ref<JointVector> output) noexcept {
+  const Eigen::Index n = output.size();
+  if (q.size() != n || lower.size() != n || upper.size() != n ||
+      !(safe_range > 0.0) || !std::isfinite(safe_range) ||
+      !std::isfinite(max_torque)) {
+    return;
+  }
+  for (Eigen::Index i = 0; i < n; ++i) {
+    const double lower_ratio = std::clamp(
+        (safe_range - (q[i] - lower[i])) / safe_range, 0.0, 1.0);
+    const double upper_ratio = std::clamp(
+        (safe_range - (upper[i] - q[i])) / safe_range, 0.0, 1.0);
+    output[i] += max_torque * (lower_ratio - upper_ratio);
+  }
+}
+
+void addFrictionTorque(const JointVector& dq, const JointVector& fp1,
+                       const JointVector& fp2, const JointVector& fp3,
+                       Eigen::Ref<JointVector> output) noexcept {
+  const Eigen::Index n = output.size();
+  if (dq.size() != n || fp1.size() != n || fp2.size() != n ||
+      fp3.size() != n) {
+    return;
+  }
+  for (Eigen::Index i = 0; i < n; ++i) {
+    output[i] +=
+        fp1[i] / (1.0 + std::exp(-fp2[i] * (dq[i] + fp3[i]))) -
+        fp1[i] / (1.0 + std::exp(-fp2[i] * fp3[i]));
+  }
+}
+
 JointVector jointLimitTorque(const JointVector& q, const JointVector& lower,
                              const JointVector& upper, const double safe_range,
                              const double max_torque) {
-  const Eigen::ArrayXd lower_ratio =
-      ((safe_range - (q - lower).array()) / safe_range)
-          .cwiseMax(0.0)
-          .cwiseMin(1.0);
-  const Eigen::ArrayXd upper_ratio =
-      ((safe_range - (upper - q).array()) / safe_range)
-          .cwiseMax(0.0)
-          .cwiseMin(1.0);
-  return (max_torque * (lower_ratio - upper_ratio)).matrix();
+  JointVector output = JointVector::Zero(q.size());
+  addJointLimitTorque(q, lower, upper, safe_range, max_torque, output);
+  return output;
 }
 
 JointVector frictionTorque(const JointVector& dq, const JointVector& fp1,
                            const JointVector& fp2, const JointVector& fp3) {
-  const Eigen::ArrayXd ones = Eigen::ArrayXd::Ones(dq.size());
-  return (fp1.array() /
-              (ones + (-fp2.array() * (dq.array() + fp3.array())).exp()) -
-          fp1.array() / (ones + (-fp2.array() * fp3.array()).exp()))
-      .matrix();
+  JointVector output = JointVector::Zero(dq.size());
+  addFrictionTorque(dq, fp1, fp2, fp3, output);
+  return output;
 }
 
 }  // namespace daedalus

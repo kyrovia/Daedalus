@@ -17,14 +17,20 @@ namespace daedalus {
 // Software rate/amplitude limiting, not a certified safety function.
 // Joint references are clipped. Cartesian references are validated but not
 // clipped toward the current pose; task-error clipping belongs to the
-// controller (for example OperationalSpaceConfig::limit_error).
+// controller (OperationalSpaceConfig::limit_error /
+// CartesianImpedanceConfig::limit_error).
 enum class PipelineFailPolicy {
   kNoCommand,
+  // Replay the last successful command with a non-ok status. Does not reverse
+  // a command that was already driving the robot into a limit; callers must
+  // inspect status, not only command != nullptr.
   kHoldLast,
 };
 
 struct ControlStepResult final {
   ControlStatus status{ControlStatus::kOk};
+  // Points at pipeline-owned storage. Invalidated by the next step() or a
+  // successful reset().
   const TorqueCommand* command{nullptr};
 
   [[nodiscard]] constexpr bool ok() const noexcept {
@@ -41,6 +47,13 @@ struct ControllerHasDof : std::false_type {};
 
 template <typename T>
 struct ControllerHasDof<T, std::void_t<decltype(std::declval<const T&>().dof())>>
+    : std::true_type {};
+
+template <typename T, typename = void>
+struct ControllerHasReset : std::false_type {};
+
+template <typename T>
+struct ControllerHasReset<T, std::void_t<decltype(std::declval<T&>().reset())>>
     : std::true_type {};
 
 template <typename Controller>
@@ -123,6 +136,11 @@ class ControlPipeline final {
 
   [[nodiscard]] ControlResult reset(
       const JointVector& initial_torque) noexcept {
+    if constexpr (ControllerHasReset<Controller>::value) {
+      static_assert(noexcept(std::declval<Controller&>().reset()),
+                    "controller reset() must be noexcept");
+      controller_->reset();
+    }
     const ControlResult result = torque_filter_.resetRealtime(initial_torque);
     if (result) {
       has_command_ = false;

@@ -118,6 +118,21 @@ TEST_CASE("Pinocchio model exposes link2 kinematics") {
                     std::invalid_argument);
 }
 
+TEST_CASE("Frame ids are resolved once and reject unknown names") {
+  const auto model = makeModel();
+  REQUIRE(model->frameId("link2") >= 0);
+  REQUIRE(model->hasFrame("link2"));
+  REQUIRE_THROWS_AS(model->frameId("missing_frame"), std::invalid_argument);
+
+  auto context = model->createContext();
+  daedalus::CartesianPose pose;
+  REQUIRE(model->framePoseRealtime(context, JointVector::Zero(2),
+                                   model->frameId("link2"), pose));
+  REQUIRE(model
+              ->framePoseRealtime(context, JointVector::Zero(2), -1, pose)
+              .status == daedalus::ControlStatus::kModelError);
+}
+
 TEST_CASE("Local and world-aligned Jacobians differ at a bent pose") {
   const auto model = makeModel();
   JointVector q(2);

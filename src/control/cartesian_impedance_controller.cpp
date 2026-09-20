@@ -1,7 +1,7 @@
 #include "daedalus/control/cartesian_impedance_controller.hpp"
 
+#include <algorithm>
 #include <stdexcept>
-#include <string>
 #include <utility>
 
 #include "daedalus/common/vector_require.hpp"
@@ -43,13 +43,11 @@ CartesianImpedanceController::CartesianImpedanceController(
   }
   requireNonnegative(config_.nullspace_stiffness, "nullspace_stiffness");
   requireNonnegative(config_.nullspace_damping, "nullspace_damping");
+  requirePositive(config_.error_clip, 6, "error_clip");
   if (config_.end_effector_frame.empty()) {
     throw std::invalid_argument("end_effector_frame must not be empty");
   }
-  if (!model_->hasFrame(config_.end_effector_frame)) {
-    throw std::invalid_argument("unknown frame '" +
-                                config_.end_effector_frame + "'");
-  }
+  end_effector_frame_id_ = model_->frameId(config_.end_effector_frame);
 }
 
 ControlResult CartesianImpedanceController::compute(
@@ -71,12 +69,12 @@ ControlResult CartesianImpedanceController::compute(
   }
 
   ControlResult result = model_->framePoseRealtime(
-      context_, state.q, config_.end_effector_frame, pose_);
+      context_, state.q, end_effector_frame_id_, pose_);
   if (!result) {
     return result;
   }
   result = model_->frameJacobianRealtime(
-      context_, state.q, config_.end_effector_frame,
+      context_, state.q, end_effector_frame_id_,
       JacobianReference::kLocalWorldAligned, jacobian_);
   if (!result) {
     return result;
@@ -85,6 +83,12 @@ ControlResult CartesianImpedanceController::compute(
   error_.head<3>() = pose_.position - reference.pose.position;
   orientationError(reference.pose.orientation.normalized(),
                    pose_.orientation.normalized(), error_.tail<3>());
+  if (config_.limit_error) {
+    for (Eigen::Index index = 0; index < 6; ++index) {
+      error_[index] = std::clamp(error_[index], -config_.error_clip[index],
+                                 config_.error_clip[index]);
+    }
+  }
 
   task_wrench_.noalias() = jacobian_ * state.dq;
   for (Eigen::Index index = 0; index < 6; ++index) {

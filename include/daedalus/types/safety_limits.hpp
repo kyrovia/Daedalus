@@ -5,6 +5,9 @@
 namespace daedalus {
 
 // Caller-supplied software limits. Wrong values are still wrong commands.
+// These are independent of URDF joint limits. If an operational-space
+// controller should repel inside this box, set OperationalSpaceConfig
+// joint_limit_lower/upper to the same values.
 struct SafetyLimits {
   JointVector q_lower;
   JointVector q_upper;

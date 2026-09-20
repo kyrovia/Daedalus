@@ -39,6 +39,7 @@ class CartesianImpedanceController final {
   mutable JointVector secondary_;
   mutable JointVector gravity_workspace_;
   mutable DampedPseudoInverseWorkspace pinv_workspace_;
+  int end_effector_frame_id_{0};
 };
 
 }  // namespace daedalus
