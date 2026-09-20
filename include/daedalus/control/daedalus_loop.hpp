@@ -6,6 +6,7 @@
 #include "daedalus/control/computed_torque_controller.hpp"
 #include "daedalus/control/gravity_compensator.hpp"
 #include "daedalus/control/joint_impedance_controller.hpp"
+#include "daedalus/control/operational_space_controller.hpp"
 #include "daedalus/safety/reference_limiter.hpp"
 #include "daedalus/safety/torque_filter.hpp"
 #include "daedalus/types/cartesian_types.hpp"
@@ -17,6 +18,7 @@ enum class ControllerMode {
   kComputedTorque,
   kJointImpedance,
   kCartesianImpedance,
+  kOperationalSpace,
 };
 
 class DaedalusLoop final {
@@ -26,6 +28,7 @@ class DaedalusLoop final {
                ComputedTorqueConfig computed_torque_config,
                JointImpedanceConfig impedance_config,
                CartesianImpedanceConfig cartesian_config,
+               OperationalSpaceConfig operational_space_config,
                ControllerMode initial_mode,
                const JointVector& initial_tau);
 
@@ -44,6 +47,7 @@ class DaedalusLoop final {
   ComputedTorqueController computed_torque_;
   JointImpedanceController impedance_;
   CartesianImpedanceController cartesian_impedance_;
+  OperationalSpaceController operational_space_;
   ReferenceLimiter reference_limiter_;
   TorqueFilter torque_filter_;
   ControllerMode mode_;

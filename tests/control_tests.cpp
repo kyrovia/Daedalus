@@ -10,6 +10,7 @@
 #include "daedalus/control/daedalus_loop.hpp"
 #include "daedalus/control/gravity_compensator.hpp"
 #include "daedalus/control/joint_impedance_controller.hpp"
+#include "daedalus/control/operational_space_controller.hpp"
 #include "daedalus/safety/reference_limiter.hpp"
 #include "daedalus/safety/torque_filter.hpp"
 
@@ -44,6 +45,14 @@ JointReference zeroReference() {
 
 daedalus::CartesianImpedanceConfig makeCartesianConfig() {
   daedalus::CartesianImpedanceConfig config;
+  config.stiffness.resize(6);
+  config.stiffness << 200.0, 200.0, 200.0, 20.0, 20.0, 20.0;
+  config.end_effector_frame = "link2";
+  return config;
+}
+
+daedalus::OperationalSpaceConfig makeOperationalSpaceConfig() {
+  daedalus::OperationalSpaceConfig config;
   config.stiffness.resize(6);
   config.stiffness << 200.0, 200.0, 200.0, 20.0, 20.0, 20.0;
   config.end_effector_frame = "link2";
@@ -146,6 +155,7 @@ TEST_CASE("DaedalusLoop mode switching preserves torque continuity") {
       {JointVector::Constant(2, 100.0), JointVector::Constant(2, 20.0)},
       {JointVector::Constant(2, 80.0), JointVector::Constant(2, 12.0)},
       makeCartesianConfig(),
+      makeOperationalSpaceConfig(),
       daedalus::ControllerMode::kGravityCompensation,
       JointVector::Zero(2));
 
@@ -239,6 +249,7 @@ TEST_CASE("DaedalusLoop cartesian mode uses CartesianReference") {
       {JointVector::Constant(2, 100.0), JointVector::Constant(2, 20.0)},
       {JointVector::Constant(2, 80.0), JointVector::Constant(2, 12.0)},
       makeCartesianConfig(),
+      makeOperationalSpaceConfig(),
       daedalus::ControllerMode::kCartesianImpedance, JointVector::Zero(2));
 
   const JointState state = zeroState();
@@ -248,4 +259,112 @@ TEST_CASE("DaedalusLoop cartesian mode uses CartesianReference") {
   REQUIRE((torque - model->gravity(state.q)).norm() < 1e-12);
   REQUIRE_THROWS_AS(loop.compute(state, zeroReference(), 0.001),
                     std::logic_error);
+}
+
+TEST_CASE("Operational space controller reduces to gravity at zero error") {
+  const auto model = makeModel();
+  daedalus::OperationalSpaceController controller(
+      model, makeOperationalSpaceConfig());
+  const JointState state = zeroState();
+  const auto reference =
+      poseReference(model->framePose(state.q, "link2"));
+
+  const JointVector torque = controller.compute(state, reference);
+  REQUIRE((torque - model->gravity(state.q)).norm() < 1e-10);
+}
+
+TEST_CASE("Operational space controller produces finite task torque") {
+  const auto model = makeModel();
+  auto config = makeOperationalSpaceConfig();
+  config.use_gravity = false;
+  config.use_coriolis = false;
+  config.use_joint_limit_repulsion = false;
+  daedalus::OperationalSpaceController controller(model, config);
+  const JointState state = zeroState();
+  auto reference = poseReference(model->framePose(state.q, "link2"));
+  reference.pose.position.z() += 0.05;
+
+  const JointVector torque = controller.compute(state, reference);
+  REQUIRE(torque.allFinite());
+  REQUIRE(torque.norm() > 1e-6);
+}
+
+TEST_CASE("Operational space controller validates config and inputs") {
+  const auto model = makeModel();
+  auto config = makeOperationalSpaceConfig();
+  config.operational_space_regularization = 0.0;
+  REQUIRE_THROWS_AS(
+      daedalus::OperationalSpaceController(model, config),
+      std::invalid_argument);
+
+  config = makeOperationalSpaceConfig();
+  config.nullspace_projector =
+      daedalus::NullspaceProjector::kKinematic;
+  config.nullspace_stiffness = 10.0;
+  daedalus::OperationalSpaceController controller(model, config);
+  JointState state = zeroState();
+  auto reference = poseReference(model->framePose(state.q, "link2"));
+  reference.q_nullspace = JointVector::Ones(2);
+  REQUIRE(controller.compute(state, reference).allFinite());
+
+  reference.pose.orientation.coeffs()[0] =
+      std::numeric_limits<double>::quiet_NaN();
+  REQUIRE_THROWS_AS(
+      controller.compute(state, reference), std::invalid_argument);
+}
+
+TEST_CASE("Operational space optional friction and joint-limit terms apply") {
+  const auto model = makeModel();
+  auto base_config = makeOperationalSpaceConfig();
+  base_config.use_gravity = false;
+  base_config.use_coriolis = false;
+  base_config.use_joint_limit_repulsion = false;
+  daedalus::OperationalSpaceController base(model, base_config);
+
+  auto friction_config = base_config;
+  friction_config.use_friction = true;
+  friction_config.friction_fp1 = JointVector::Constant(2, 2.0);
+  friction_config.friction_fp2 = JointVector::Constant(2, 3.0);
+  friction_config.friction_fp3 = JointVector::Constant(2, 0.1);
+  daedalus::OperationalSpaceController friction(model, friction_config);
+  JointState moving{
+      JointVector::Zero(2), JointVector::Constant(2, 0.2)};
+  const auto moving_reference =
+      poseReference(model->framePose(moving.q, "link2"));
+  REQUIRE((friction.compute(moving, moving_reference) -
+           base.compute(moving, moving_reference))
+              .norm() > 1e-6);
+
+  auto limit_config = base_config;
+  limit_config.use_joint_limit_repulsion = true;
+  daedalus::OperationalSpaceController no_limits(model, base_config);
+  daedalus::OperationalSpaceController limits(model, limit_config);
+  JointState near_limit = zeroState();
+  near_limit.q[0] = 3.0;
+  const auto limit_reference =
+      poseReference(model->framePose(near_limit.q, "link2"));
+  REQUIRE((limits.compute(near_limit, limit_reference) -
+           no_limits.compute(near_limit, limit_reference))[0] < 0.0);
+}
+
+TEST_CASE("DaedalusLoop operational space mode uses common torque filter") {
+  const auto model = makeModel();
+  daedalus::DaedalusLoop loop(
+      model, makeLimits(100.0, 10.0),
+      {JointVector::Constant(2, 100.0), JointVector::Constant(2, 20.0)},
+      {JointVector::Constant(2, 80.0), JointVector::Constant(2, 12.0)},
+      makeCartesianConfig(), makeOperationalSpaceConfig(),
+      daedalus::ControllerMode::kGravityCompensation,
+      JointVector::Zero(2));
+  const JointState state = zeroState();
+  auto reference = poseReference(model->framePose(state.q, "link2"));
+  reference.pose.position.z() += 0.1;
+
+  const JointVector before =
+      loop.compute(state, zeroReference(), 0.001);
+  loop.setMode(daedalus::ControllerMode::kOperationalSpace, before);
+  const JointVector torque = loop.compute(state, reference, 0.001);
+  REQUIRE((((torque - before).array().abs()) <= 0.0100000001).all());
+  REQUIRE_THROWS_AS(
+      loop.compute(state, zeroReference(), 0.001), std::logic_error);
 }

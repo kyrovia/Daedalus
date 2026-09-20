@@ -36,9 +36,12 @@ int main(int argc, char** argv) {
       throw std::runtime_error("URDF has no body frames");
     }
     cartesian.end_effector_frame = body_frames.back();
+    daedalus::OperationalSpaceConfig operational_space;
+    operational_space.stiffness = cartesian.stiffness;
+    operational_space.end_effector_frame = cartesian.end_effector_frame;
 
     daedalus::DaedalusLoop loop(
-        model, limits, ctc, impedance, cartesian,
+        model, limits, ctc, impedance, cartesian, operational_space,
         daedalus::ControllerMode::kGravityCompensation,
         daedalus::JointVector::Zero(n));
     const daedalus::JointState state{
