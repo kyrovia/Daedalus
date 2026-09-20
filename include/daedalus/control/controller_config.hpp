@@ -4,7 +4,6 @@
 
 #include "daedalus/types/cartesian_types.hpp"
 #include "daedalus/types/joint_types.hpp"
-#include "daedalus/types/safety_limits.hpp"
 
 namespace daedalus {
 
@@ -57,14 +56,6 @@ struct OperationalSpaceConfig {
   double joint_limit_max_torque{5.0};
   double nullspace_max_torque{10.0};
   double target_filter_alpha{0.0};
-};
-
-struct DaedalusConfig {
-  SafetyLimits safety;
-  ComputedTorqueConfig computed_torque;
-  JointImpedanceConfig joint_impedance;
-  CartesianImpedanceConfig cartesian_impedance;
-  OperationalSpaceConfig operational_space;
 };
 
 }  // namespace daedalus
