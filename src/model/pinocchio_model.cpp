@@ -4,6 +4,8 @@
 #include <string>
 #include <utility>
 
+#include <pinocchio/algorithm/aba.hpp>
+#include <pinocchio/algorithm/compute-all-terms.hpp>
 #include <pinocchio/algorithm/frames.hpp>
 #include <pinocchio/algorithm/jacobian.hpp>
 #include <pinocchio/algorithm/kinematics.hpp>
@@ -88,10 +90,37 @@ JointVector PinocchioModel::effortLimits() const {
   return impl_->model.effortLimit;
 }
 
+JointVector PinocchioModel::lowerPositionLimits() const {
+  return impl_->model.lowerPositionLimit;
+}
+
+JointVector PinocchioModel::upperPositionLimits() const {
+  return impl_->model.upperPositionLimit;
+}
+
 //重力补偿
 JointVector PinocchioModel::gravity(const JointVector& q) const {
   requireSizeAndFinite(q, nq(), "q");
   return pinocchio::computeGeneralizedGravity(impl_->model, impl_->data, q);
+}
+
+JointVector PinocchioModel::coriolis(
+    const JointVector& q, const JointVector& dq) const {
+  requireSizeAndFinite(q, nq(), "q");
+  requireSizeAndFinite(dq, nv(), "dq");
+  pinocchio::computeAllTerms(impl_->model, impl_->data, q, dq);
+  return pinocchio::computeCoriolisMatrix(
+             impl_->model, impl_->data, q, dq) *
+         dq;
+}
+
+Eigen::MatrixXd PinocchioModel::inverseMassMatrix(
+    const JointVector& q) const {
+  requireSizeAndFinite(q, nq(), "q");
+  pinocchio::computeMinverse(impl_->model, impl_->data, q);
+  impl_->data.Minv.triangularView<Eigen::StrictlyLower>() =
+      impl_->data.Minv.transpose().triangularView<Eigen::StrictlyLower>();
+  return impl_->data.Minv;
 }
 
 //完整逆动力学rnea
@@ -136,6 +165,18 @@ Eigen::MatrixXd PinocchioModel::frameJacobian(
   Eigen::MatrixXd jacobian(6, nv());
   pinocchio::computeFrameJacobian(impl_->model, impl_->data, q, frame_id,
                                   pinocchio::LOCAL_WORLD_ALIGNED, jacobian);
+  return jacobian;
+}
+
+///LOCAL 原点和坐标都在末端，当任务由末端描述时使用，但代码重复，需要重构这部分
+Eigen::MatrixXd PinocchioModel::localFrameJacobian(
+    const JointVector& q, const std::string& frame_name) const {
+  requireSizeAndFinite(q, nq(), "q");
+  const pinocchio::FrameIndex frame_id =
+      requireFrameId(impl_->model, frame_name);
+  Eigen::MatrixXd jacobian(6, nv());
+  pinocchio::computeFrameJacobian(
+      impl_->model, impl_->data, q, frame_id, pinocchio::LOCAL, jacobian);
   return jacobian;
 }
 

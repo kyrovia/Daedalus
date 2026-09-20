@@ -25,14 +25,22 @@ class PinocchioModel final {
   [[nodiscard]] std::vector<std::string> bodyFrameNames() const;
   [[nodiscard]] bool hasFrame(const std::string& frame_name) const;
   [[nodiscard]] JointVector effortLimits() const;
+  [[nodiscard]] JointVector lowerPositionLimits() const;
+  [[nodiscard]] JointVector upperPositionLimits() const;
 
   [[nodiscard]] JointVector gravity(const JointVector& q) const;
+  [[nodiscard]] JointVector coriolis(const JointVector& q,
+                                     const JointVector& dq) const;
+  [[nodiscard]] Eigen::MatrixXd inverseMassMatrix(
+      const JointVector& q) const;
   [[nodiscard]] JointVector inverseDynamics(
       const JointVector& q, const JointVector& dq,
       const JointVector& ddq) const;
   [[nodiscard]] CartesianPose framePose(
       const JointVector& q, const std::string& frame_name) const;
   [[nodiscard]] Eigen::MatrixXd frameJacobian(
+      const JointVector& q, const std::string& frame_name) const;
+  [[nodiscard]] Eigen::MatrixXd localFrameJacobian(
       const JointVector& q, const std::string& frame_name) const;
 
  private:
