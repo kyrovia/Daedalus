@@ -4,26 +4,11 @@
 #include <string>
 #include <utility>
 
-#include <Eigen/SVD>
-
 #include "daedalus/common/vector_require.hpp"
+#include "daedalus/control/control_math.hpp"
 
 namespace daedalus {
 namespace {
-///零空间投影矩阵用的阻尼伪逆
-Eigen::MatrixXd dampedPseudoInverse(const Eigen::MatrixXd& matrix,
-                                    const double lambda = 0.2) {
-  const Eigen::JacobiSVD<Eigen::MatrixXd> svd(
-      matrix, Eigen::ComputeThinU | Eigen::ComputeThinV);
-  const auto& singular_values = svd.singularValues();
-  Eigen::VectorXd inverted(singular_values.size());
-  const double lambda_squared = lambda * lambda;
-  for (Eigen::Index i = 0; i < singular_values.size(); ++i) {
-    const double sigma = singular_values[i];
-    inverted[i] = sigma / (sigma * sigma + lambda_squared);
-  }
-  return svd.matrixV() * inverted.asDiagonal() * svd.matrixU().transpose();
-}
 
 Eigen::Vector3d orientationError(const Eigen::Quaterniond& desired,
                                  Eigen::Quaterniond current) {
@@ -93,7 +78,7 @@ JointVector CartesianImpedanceController::compute(
     const Eigen::MatrixXd jacobian_transpose = jacobian.transpose();
     const Eigen::MatrixXd nullspace_projector =
         Eigen::MatrixXd::Identity(nv, nv) -
-        jacobian_transpose * dampedPseudoInverse(jacobian_transpose);
+        jacobian_transpose * dampedPseudoInverse(jacobian_transpose, 0.2);
     torque += nullspace_projector *
               (config_.nullspace_stiffness *
                    (reference.q_nullspace - state.q) -

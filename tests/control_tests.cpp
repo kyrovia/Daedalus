@@ -7,6 +7,8 @@
 
 #include "daedalus/control/cartesian_impedance_controller.hpp"
 #include "daedalus/control/computed_torque_controller.hpp"
+#include "daedalus/control/config_loader.hpp"
+#include "daedalus/control/control_math.hpp"
 #include "daedalus/control/daedalus_loop.hpp"
 #include "daedalus/control/gravity_compensator.hpp"
 #include "daedalus/control/joint_impedance_controller.hpp"
@@ -192,6 +194,36 @@ TEST_CASE("Pinocchio model exposes link2 kinematics") {
                     std::invalid_argument);
 }
 
+TEST_CASE("Local and world-aligned Jacobians differ at a bent pose") {
+  const auto model = makeModel();
+  JointVector q(2);
+  q << 0.4, -0.7;
+  const Eigen::MatrixXd world = model->frameJacobian(
+      q, "link2", daedalus::JacobianReference::kLocalWorldAligned);
+  const Eigen::MatrixXd local = model->frameJacobian(
+      q, "link2", daedalus::JacobianReference::kLocal);
+  REQUIRE(world.rows() == 6);
+  REQUIRE(world.cols() == 2);
+  REQUIRE(local.rows() == 6);
+  REQUIRE(local.cols() == 2);
+  REQUIRE((world - local).norm() > 1e-6);
+}
+
+TEST_CASE("Damped pseudo-inverse of identity is near identity") {
+  const Eigen::MatrixXd identity = Eigen::MatrixXd::Identity(3, 3);
+  const Eigen::MatrixXd inverse =
+      daedalus::dampedPseudoInverse(identity, 1e-6);
+  REQUIRE((inverse - identity).norm() < 1e-8);
+}
+
+TEST_CASE("Friction feedforward is zero at rest") {
+  const JointVector zeros = JointVector::Zero(2);
+  const JointVector torque = daedalus::frictionTorque(
+      zeros, JointVector::Constant(2, 2.0), JointVector::Constant(2, 3.0),
+      JointVector::Constant(2, 0.1));
+  REQUIRE(torque.norm() < 1e-12);
+}
+
 TEST_CASE("Cartesian impedance at zero error reduces to gravity") {
   const auto model = makeModel();
   daedalus::CartesianImpedanceController controller(
@@ -367,4 +399,30 @@ TEST_CASE("DaedalusLoop operational space mode uses common torque filter") {
   REQUIRE((((torque - before).array().abs()) <= 0.0100000001).all());
   REQUIRE_THROWS_AS(
       loop.compute(state, zeroReference(), 0.001), std::logic_error);
+}
+
+TEST_CASE("YAML control config loads and runs operational space") {
+  const auto model = makeModel();
+  const auto config =
+      daedalus::loadDaedalusConfig(DAEDALUS_TEST_CONTROL_YAML, model->nv());
+  REQUIRE(config.computed_torque.kp.size() == 2);
+  REQUIRE(config.computed_torque.kp[0] == 100.0);
+  REQUIRE(config.operational_space.end_effector_frame == "link2");
+  REQUIRE(config.operational_space.jacobian_reference ==
+          daedalus::JacobianReference::kLocal);
+
+  daedalus::OperationalSpaceController controller(
+      model, config.operational_space);
+  const JointState state = zeroState();
+  const JointVector torque = controller.compute(
+      state, poseReference(model->framePose(state.q, "link2")));
+  REQUIRE((torque - model->gravity(state.q)).norm() < 1e-10);
+}
+
+TEST_CASE("YAML loader rejects unknown jacobian_reference") {
+  const auto model = makeModel();
+  REQUIRE_THROWS_AS(
+      daedalus::loadDaedalusConfig(DAEDALUS_TEST_INVALID_JACOBIAN_YAML,
+                                  model->nv()),
+      std::invalid_argument);
 }

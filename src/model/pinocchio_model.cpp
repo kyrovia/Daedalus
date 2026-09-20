@@ -143,6 +143,17 @@ pinocchio::FrameIndex requireFrameId(const pinocchio::Model& model,
   return model.getFrameId(frame_name);
 }
 
+pinocchio::ReferenceFrame pinocchioReference(
+    const JacobianReference reference) {
+  switch (reference) {
+    case JacobianReference::kLocal:
+      return pinocchio::LOCAL;
+    case JacobianReference::kLocalWorldAligned:
+      return pinocchio::LOCAL_WORLD_ALIGNED;
+  }
+  throw std::invalid_argument("unknown JacobianReference");
+}
+
 }  // namespace
 
 ///计算frame的位姿
@@ -156,27 +167,17 @@ CartesianPose PinocchioModel::framePose(
   const pinocchio::SE3& placement = impl_->data.oMf[frame_id];
   return {placement.translation(), Eigen::Quaterniond(placement.rotation())};
 }
-///LOCAL_WORLD_ALIGNED 原点在末端，坐标系在world，速度符合真实末端速度，且可以用world去表示task
+
+/// LOCAL_WORLD_ALIGNED：原点在末端、坐标轴对齐世界；LOCAL：原点与坐标轴都在末端。
 Eigen::MatrixXd PinocchioModel::frameJacobian(
-    const JointVector& q, const std::string& frame_name) const {
+    const JointVector& q, const std::string& frame_name,
+    const JacobianReference reference) const {
   requireSizeAndFinite(q, nq(), "q");
   const pinocchio::FrameIndex frame_id =
       requireFrameId(impl_->model, frame_name);
   Eigen::MatrixXd jacobian(6, nv());
   pinocchio::computeFrameJacobian(impl_->model, impl_->data, q, frame_id,
-                                  pinocchio::LOCAL_WORLD_ALIGNED, jacobian);
-  return jacobian;
-}
-
-///LOCAL 原点和坐标都在末端，当任务由末端描述时使用，但代码重复，需要重构这部分
-Eigen::MatrixXd PinocchioModel::localFrameJacobian(
-    const JointVector& q, const std::string& frame_name) const {
-  requireSizeAndFinite(q, nq(), "q");
-  const pinocchio::FrameIndex frame_id =
-      requireFrameId(impl_->model, frame_name);
-  Eigen::MatrixXd jacobian(6, nv());
-  pinocchio::computeFrameJacobian(
-      impl_->model, impl_->data, q, frame_id, pinocchio::LOCAL, jacobian);
+                                  pinocchioReference(reference), jacobian);
   return jacobian;
 }
 

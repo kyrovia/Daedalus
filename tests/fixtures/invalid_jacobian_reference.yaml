@@ -1,0 +1,24 @@
+safety:
+  q_lower: -3.0
+  q_upper: 3.0
+  dq_max: 4.0
+  ddq_max: 8.0
+  tau_max: 100.0
+  tau_rate_max: 1000.0
+
+computed_torque:
+  kp: 100.0
+  kd: 20.0
+
+joint_impedance:
+  stiffness: 80.0
+  damping: 12.0
+
+cartesian_impedance:
+  stiffness: [200.0, 200.0, 200.0, 20.0, 20.0, 20.0]
+  end_effector_frame: link2
+
+operational_space:
+  stiffness: [200.0, 200.0, 200.0, 20.0, 20.0, 20.0]
+  end_effector_frame: link2
+  jacobian_reference: sideways

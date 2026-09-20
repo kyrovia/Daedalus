@@ -1,61 +1,15 @@
 #include "daedalus/control/operational_space_controller.hpp"
 
-#include <algorithm>
 #include <cmath>
 #include <stdexcept>
-#include <string>
 #include <utility>
 
-#include <Eigen/SVD>
 #include <pinocchio/spatial/explog.hpp>
 
 #include "daedalus/common/vector_require.hpp"
+#include "daedalus/control/control_math.hpp"
 
 namespace daedalus {
-namespace {
-
-Eigen::MatrixXd dampedPseudoInverse(const Eigen::MatrixXd& matrix,
-                                    const double regularization) {
-  const Eigen::JacobiSVD<Eigen::MatrixXd> svd(
-      matrix, Eigen::ComputeFullU | Eigen::ComputeFullV);
-  Eigen::MatrixXd inverse = Eigen::MatrixXd::Zero(
-      svd.matrixV().cols(), svd.matrixU().rows());
-  const double squared = regularization * regularization;
-  for (Eigen::Index index = 0; index < svd.singularValues().size(); ++index) {
-    const double sigma = svd.singularValues()[index];
-    inverse(index, index) = sigma / (sigma * sigma + squared);
-  }
-  return svd.matrixV() * inverse * svd.matrixU().transpose();
-}
-
-JointVector jointLimitTorque(const JointVector& q,
-                             const JointVector& lower,
-                             const JointVector& upper,
-                             const double safe_range,
-                             const double max_torque) {
-  const Eigen::ArrayXd lower_ratio =
-      ((safe_range - (q - lower).array()) / safe_range)
-          .cwiseMax(0.0)
-          .cwiseMin(1.0);
-  const Eigen::ArrayXd upper_ratio =
-      ((safe_range - (upper - q).array()) / safe_range)
-          .cwiseMax(0.0)
-          .cwiseMin(1.0);
-  return (max_torque * (lower_ratio - upper_ratio)).matrix();
-}
-///工程近似的库伦摩擦和粘性摩擦
-JointVector frictionTorque(const JointVector& dq,
-                           const JointVector& fp1,
-                           const JointVector& fp2,
-                           const JointVector& fp3) {
-  const Eigen::ArrayXd ones = Eigen::ArrayXd::Ones(dq.size());
-  return (fp1.array() /
-              (ones + (-fp2.array() * (dq.array() + fp3.array())).exp()) -
-          fp1.array() / (ones + (-fp2.array() * fp3.array()).exp()))
-      .matrix();
-}
-
-}  // namespace
 
 OperationalSpaceController::OperationalSpaceController(
     std::shared_ptr<const PinocchioModel> model, OperationalSpaceConfig config)
@@ -147,7 +101,9 @@ JointVector OperationalSpaceController::compute(
       pose.orientation.normalized().toRotationMatrix();
   const Eigen::Matrix3d desired_rotation =
       desired_orientation_.toRotationMatrix();
-  if (config_.use_local_jacobian) {
+  const bool use_local =
+      config_.jacobian_reference == JacobianReference::kLocal;
+  if (use_local) {
     error.head<3>() =
         current_rotation.transpose() * (desired_position_ - pose.position);
     error.tail<3>() =
@@ -157,21 +113,15 @@ JointVector OperationalSpaceController::compute(
     error.tail<3>() =
         pinocchio::log3(desired_rotation * current_rotation.transpose());
   }
-  ///误差限幅
   if (config_.limit_error) {
     error = error.cwiseMax(-config_.error_clip)
                 .cwiseMin(config_.error_clip);
   }
 
-  const Eigen::MatrixXd jacobian =
-      config_.use_local_jacobian
-          ? model_->localFrameJacobian(
-                state.q, config_.end_effector_frame)
-          : model_->frameJacobian(
-                state.q, config_.end_effector_frame);
+  const Eigen::MatrixXd jacobian = model_->frameJacobian(
+      state.q, config_.end_effector_frame, config_.jacobian_reference);
   const Eigen::MatrixXd inverse_mass =
       model_->inverseMassMatrix(state.q);
-  ///任务惯性矩阵
   const Eigen::MatrixXd task_inertia = dampedPseudoInverse(
       jacobian * inverse_mass * jacobian.transpose(),
       config_.operational_space_regularization);
@@ -183,18 +133,19 @@ JointVector OperationalSpaceController::compute(
   Eigen::MatrixXd projector =
       Eigen::MatrixXd::Identity(model_->nv(), model_->nv());
 
-  ///运动学，保持末端速度不变，低精度场景
+  /// 动力学一致投影：保持末端加速度不变
   if (config_.nullspace_projector == NullspaceProjector::kDynamic) {
     const Eigen::MatrixXd j_bar =
         inverse_mass * jacobian.transpose() * task_inertia;
     projector.noalias() -= jacobian.transpose() * j_bar.transpose();
   } else if (
       config_.nullspace_projector == NullspaceProjector::kKinematic) {
+    /// 运动学投影：保持末端速度不变
     projector.noalias() -=
         dampedPseudoInverse(
             jacobian, config_.nullspace_regularization) *
         jacobian;
-  }///动力学一致伪逆，保持末端加速度不变，高精度场景
+  }
   JointVector secondary =
       config_.nullspace_stiffness *
           config_.nullspace_weights.cwiseProduct(

@@ -39,9 +39,9 @@ class PinocchioModel final {
   [[nodiscard]] CartesianPose framePose(
       const JointVector& q, const std::string& frame_name) const;
   [[nodiscard]] Eigen::MatrixXd frameJacobian(
-      const JointVector& q, const std::string& frame_name) const;
-  [[nodiscard]] Eigen::MatrixXd localFrameJacobian(
-      const JointVector& q, const std::string& frame_name) const;
+      const JointVector& q, const std::string& frame_name,
+      JacobianReference reference =
+          JacobianReference::kLocalWorldAligned) const;
 
  private:
   struct Impl;

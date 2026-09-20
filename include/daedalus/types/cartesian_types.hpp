@@ -8,6 +8,11 @@ namespace daedalus {
 
 using CartesianVector = Eigen::Matrix<double, 6, 1>;
 
+enum class JacobianReference {
+  kLocalWorldAligned,
+  kLocal,
+};
+
 struct CartesianPose {
   Eigen::Vector3d position = Eigen::Vector3d::Zero();
   Eigen::Quaterniond orientation = Eigen::Quaterniond::Identity();

@@ -2,7 +2,9 @@
 
 #include <string>
 
+#include "daedalus/types/cartesian_types.hpp"
 #include "daedalus/types/joint_types.hpp"
+#include "daedalus/types/safety_limits.hpp"
 
 namespace daedalus {
 
@@ -37,7 +39,7 @@ struct OperationalSpaceConfig {
   double nullspace_damping{-1.0};
   JointVector nullspace_weights;
   std::string end_effector_frame;
-  bool use_local_jacobian{true};
+  JacobianReference jacobian_reference{JacobianReference::kLocal};
   double operational_space_regularization{0.01};
   double nullspace_regularization{1e-4};
   NullspaceProjector nullspace_projector{NullspaceProjector::kDynamic};
@@ -55,6 +57,14 @@ struct OperationalSpaceConfig {
   double joint_limit_max_torque{5.0};
   double nullspace_max_torque{10.0};
   double target_filter_alpha{0.0};
+};
+
+struct DaedalusConfig {
+  SafetyLimits safety;
+  ComputedTorqueConfig computed_torque;
+  JointImpedanceConfig joint_impedance;
+  CartesianImpedanceConfig cartesian_impedance;
+  OperationalSpaceConfig operational_space;
 };
 
 }  // namespace daedalus
