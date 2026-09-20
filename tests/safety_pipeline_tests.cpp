@@ -1,4 +1,5 @@
 #include <limits>
+#include <stdexcept>
 #include <type_traits>
 
 #include <catch2/catch_test_macros.hpp>
@@ -32,9 +33,26 @@ class RecordingJointController final {
     return {};
   }
 
+  [[nodiscard]] int dof() const noexcept { return 2; }
+
   int calls{0};
   JointReference last_reference{JointVector::Zero(2), JointVector::Zero(2),
                                 JointVector::Zero(2)};
+};
+
+class RecordingCartesianController final {
+ public:
+  daedalus::ControlResult compute(const JointState&,
+                                  const daedalus::CartesianReference&,
+                                  JointVector& torque) noexcept {
+    ++calls;
+    torque.setZero();
+    return {};
+  }
+
+  [[nodiscard]] int dof() const noexcept { return 2; }
+
+  int calls{0};
 };
 
 TEST_CASE("Reference limiter clips commands and rejects unsafe measurements") {
@@ -164,6 +182,59 @@ TEST_CASE("Control pipeline saturates cartesian controller output") {
       pipeline.step(state, reference, 1.0);
   REQUIRE(result.ok());
   REQUIRE((result.command->torque().cwiseAbs().array() <= 0.05 + 1e-12).all());
+}
+
+TEST_CASE("Control pipeline rejects cartesian references before compute") {
+  RecordingCartesianController controller;
+  daedalus::ControlPipeline<RecordingCartesianController> pipeline(
+      controller, makeLimits());
+  auto reference = poseReference(framePose(makeModel(), zeroState().q, "link2"));
+  reference.pose.position.x() = std::numeric_limits<double>::quiet_NaN();
+
+  const daedalus::ControlStepResult result =
+      pipeline.step(zeroState(), reference, 0.001);
+  REQUIRE(result.status == daedalus::ControlStatus::kNonFiniteInput);
+  REQUIRE(result.command == nullptr);
+  REQUIRE(controller.calls == 0);
+}
+
+TEST_CASE("Control pipeline can hold the last safe command after failure") {
+  RecordingJointController controller;
+  daedalus::ControlPipeline<RecordingJointController> pipeline(
+      controller, makeLimits(5.0, 10.0),
+      daedalus::PipelineFailPolicy::kHoldLast);
+  const JointState state = zeroState();
+  const JointReference reference{JointVector::Constant(2, 20.0),
+                                 JointVector::Zero(2), JointVector::Zero(2)};
+
+  const daedalus::ControlStepResult first =
+      pipeline.step(state, reference, 0.1);
+  REQUIRE(first.ok());
+  const JointVector held = first.command->torque();
+
+  JointState unsafe = state;
+  unsafe.q[0] = 3.1;
+  const daedalus::ControlStepResult second =
+      pipeline.step(unsafe, reference, 0.1);
+  REQUIRE(second.status == daedalus::ControlStatus::kStateLimitViolation);
+  REQUIRE_FALSE(second.ok());
+  REQUIRE(second.command != nullptr);
+  REQUIRE((second.command->torque() - held).norm() < 1e-12);
+  REQUIRE(controller.calls == 1);
+}
+
+TEST_CASE("Control pipeline rejects controller and limit dof mismatch") {
+  const auto model = makeModel();
+  daedalus::JointImpedanceController controller(
+      model, {JointVector::Constant(2, 80.0), JointVector::Constant(2, 12.0)});
+  daedalus::SafetyLimits limits{
+      JointVector::Constant(1, -1.0), JointVector::Constant(1, 1.0),
+      JointVector::Constant(1, 1.0), JointVector::Constant(1, 1.0),
+      JointVector::Constant(1, 1.0), JointVector::Constant(1, 1.0)};
+  REQUIRE_THROWS_AS(
+      (daedalus::ControlPipeline<daedalus::JointImpedanceController>(
+          controller, limits)),
+      std::invalid_argument);
 }
 
 TEST_CASE("Safe control pipeline step performs no Eigen allocation") {

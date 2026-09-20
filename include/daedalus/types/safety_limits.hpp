@@ -4,6 +4,7 @@
 
 namespace daedalus {
 
+// Caller-supplied software limits. Wrong values are still wrong commands.
 struct SafetyLimits {
   JointVector q_lower;
   JointVector q_upper;

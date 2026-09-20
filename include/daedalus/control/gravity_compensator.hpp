@@ -2,7 +2,7 @@
 
 #include <memory>
 
-#include "daedalus/control/control_status.hpp"
+#include "daedalus/types/control_status.hpp"
 #include "daedalus/model/pinocchio_model.hpp"
 
 namespace daedalus {
@@ -10,6 +10,8 @@ namespace daedalus {
 class GravityCompensator final {
  public:
   explicit GravityCompensator(std::shared_ptr<const PinocchioModel> model);
+
+  [[nodiscard]] int dof() const noexcept { return model_->nv(); }
 
   [[nodiscard]] ControlResult compute(
       const JointState& state, const JointReference& reference,

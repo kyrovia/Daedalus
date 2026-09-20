@@ -1,6 +1,6 @@
 #pragma once
 
-#include "daedalus/control/control_status.hpp"
+#include "daedalus/types/control_status.hpp"
 #include "daedalus/types/joint_types.hpp"
 #include "daedalus/types/safety_limits.hpp"
 

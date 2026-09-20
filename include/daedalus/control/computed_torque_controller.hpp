@@ -2,7 +2,7 @@
 
 #include <memory>
 
-#include "daedalus/control/control_status.hpp"
+#include "daedalus/types/control_status.hpp"
 #include "daedalus/control/controller_config.hpp"
 #include "daedalus/model/pinocchio_model.hpp"
 
@@ -12,6 +12,8 @@ class ComputedTorqueController final {
  public:
   ComputedTorqueController(std::shared_ptr<const PinocchioModel> model,
                            ComputedTorqueConfig config);
+
+  [[nodiscard]] int dof() const noexcept { return model_->nv(); }
 
   [[nodiscard]] ControlResult compute(
       const JointState& state, const JointReference& reference,

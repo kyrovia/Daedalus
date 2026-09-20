@@ -2,7 +2,7 @@
 
 #include <memory>
 
-#include "daedalus/control/control_status.hpp"
+#include "daedalus/types/control_status.hpp"
 #include "daedalus/control/control_math.hpp"
 #include "daedalus/control/controller_config.hpp"
 #include "daedalus/model/pinocchio_model.hpp"
@@ -14,6 +14,8 @@ class OperationalSpaceController final {
  public:
   OperationalSpaceController(std::shared_ptr<const PinocchioModel> model,
                              OperationalSpaceConfig config);
+
+  [[nodiscard]] int dof() const noexcept { return model_->nv(); }
 
   [[nodiscard]] ControlResult compute(
       const JointState& state, const CartesianReference& reference,
